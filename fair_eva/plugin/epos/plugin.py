@@ -16,8 +16,8 @@ import pandas as pd
 import requests
 from dicttoxml import dicttoxml
 
-import api.utils as ut
-from api.evaluator import ConfigTerms, EvaluatorBase
+import fair_eva.api.utils as ut
+from fair_eva.api.evaluator import ConfigTerms, EvaluatorBase
 
 logging.basicConfig(
     stream=sys.stdout, level=logging.DEBUG, format="'%(name)s:%(lineno)s' | %(message)s"
