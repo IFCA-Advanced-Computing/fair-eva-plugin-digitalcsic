@@ -14,5 +14,5 @@ requires-python = ">=3.7"
 license = { text = "GNU General Public License v3.0 or later" }
 description = "FAIR-eva plugin for Digital CSIC"
 dependencies = [
-    "fair-eva",
+    "fair-eva @ git+https://github.com/IFCA-Advanced-Computing/FAIR_eva@feature/module_structure"
 ]
