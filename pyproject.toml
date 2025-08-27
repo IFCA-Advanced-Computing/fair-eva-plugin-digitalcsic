@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["fair_eva"]
+include = ["fair_eva.plugin.digital_csic"]
 namespaces = true
 
 [project]
