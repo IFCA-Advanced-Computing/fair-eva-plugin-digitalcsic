@@ -9,11 +9,10 @@ namespaces = true
 
 [project]
 version = "1.0.0"
-name = "fair-eva-plugin-epos"
+name = "fair-eva-plugin-digitalcsic"
 requires-python = ">=3.7"
 license = { text = "GNU General Public License v3.0 or later" }
-description = "FAIR-eva plugin for EPOS data platform HTTP RESTful API"
+description = "FAIR-eva plugin for Digital CSIC"
 dependencies = [
     "fair-eva",
-    "dicttoxml",
 ]
