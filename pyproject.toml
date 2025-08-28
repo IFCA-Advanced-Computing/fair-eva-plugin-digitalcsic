@@ -7,6 +7,9 @@ where = ["."]
 include = ["fair_eva.plugin.digital_csic"]
 namespaces = true
 
+[tool.setuptools.package-data]
+"fair_eva.plugin.digital_csic" = ["*.ini"]
+
 [project]
 version = "0.1.0"
 name = "fair-eva-plugin-digitalcsic"
