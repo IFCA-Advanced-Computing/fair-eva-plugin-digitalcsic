@@ -4,6 +4,7 @@ import ast
 import csv
 import json
 import logging
+import os
 import sys
 import urllib
 from functools import wraps
@@ -80,60 +81,97 @@ class Plugin(EvaluatorBase):
         self.metadata_quality = 100  # Value for metadata balancing
 
     def get_metadata(self):
+        cfg = self.config.get(self.name, {}) if isinstance(self.config, dict) else {}
+        test_mode = self.config[self.name]["test_mode"]
+        test_file = self.config[self.name]["test_metadata_file"]
+        
+        # MODE 1: TEST MODE - Load only from CSV test file
+        if test_mode:
+            logger.debug("TEST MODE ENABLED - Loading metadata from CSV test file only")
+            if test_file:
+                if not os.path.isabs(test_file):
+                    test_file = os.path.join(os.path.dirname(__file__), test_file)
+                if os.path.exists(test_file):
+                    try:
+                        if test_file.lower().endswith(".csv"):
+                            self.metadata = pd.read_csv(test_file)
+                            logger.debug(f"✓ Metadata loaded from test CSV: {test_file}")
+                            return self.metadata
+                        elif test_file.lower().endswith(".json"):
+                            self.metadata = pd.read_json(test_file)
+                            logger.debug(f"✓ Metadata loaded from test JSON: {test_file}")
+                            return self.metadata
+                    except Exception as e:
+                        logger.error(f"✗ Error loading test metadata from {test_file}: {e}")
+                        raise Exception(f"Failed to load test metadata: {e}")
+                else:
+                    raise Exception(f"Test file not found: {test_file}")
+            else:
+                raise Exception("test_mode=true but test_metadata_file is not configured")
+        
+        # MODE 2: PRODUCTION MODE - Try API or Database
+        logger.debug("PRODUCTION MODE - Attempting to retrieve metadata from API or Database")
+        api_metadata = None
+        
+        # Try API first (only for DOI or HANDLE)
         if self.id_type == "doi" or self.id_type == "handle":
-            api_endpoint = "https://digital.csic.es"
-            api_metadata = None
-            api_metadata, self.file_list = self.get_metadata_api(
-                api_endpoint, self.item_id, self.id_type
-            )
-            if api_metadata is not None:
-                if len(api_metadata) > 0:
-                    logger.debug("A102: MEtadata from API OK")
+            logger.debug(f"Attempting API retrieval for {self.id_type}: {self.item_id}")
+            try:
+                api_endpoint = "https://digital.csic.es"
+                api_metadata, self.file_list = self.get_metadata_api(
+                    api_endpoint, self.item_id, self.id_type
+                )
+                if api_metadata is not None and len(api_metadata) > 0:
+                    logger.debug("✓ Metadata from API retrieved successfully")
                     self.access_protocols = ["http"]
                     self.metadata = api_metadata
                     temp_md = self.metadata.query("element == 'identifier'")
-                    self.item_id = temp_md.query("qualifier == 'uri'")[
-                        "text_value"
-                    ].values[0]
-            logger.info("API metadata: %s" % api_metadata)
-        if api_metadata is None or len(api_metadata) == 0:
-            logger.debug("Trying DB connect")
-            try:
-                self.connection = psycopg2.connect(
-                    user=self.config["digital_csic"]["db_user"],
-                    password=self.config["digital_csic"]["db_pass"],
-                    host=self.config["digital_csic"]["db_host"],
-                    port=self.config["digital_csic"]["db_port"],
-                    database=self.config["digital_csic"]["db_db"],
-                )
-                logger.debug("DB configured")
-            except Exception as error:
-                logger.error("Error while fetching data from PostgreSQL ")
-                logger.error(error)
-
-            try:
-                self.internal_id = self.get_internal_id(self.item_id, self.connection)
-                if self.id_type == "doi":
-                    self.handle_id = self.get_handle_id(
-                        self.internal_id, self.connection
-                    )
-                elif self.id_type == "internal":
-                    self.handle_id = self.get_handle_id(
-                        self.internal_id, self.connection
-                    )
-                    self.item_id = self.handle_id
-
-                logger.debug(
-                    "INTERNAL ID: %i ITEM ID: %s" % (self.internal_id, self.item_id)
-                )
-
-                self.metadata = self.get_metadata_db()
-                logger.debug("METADATA: %s" % (self.metadata.to_string()))
-                self.metadata.to_csv("metadata_testing.csv")
+                    if len(temp_md) > 0:
+                        uri_md = temp_md.query("qualifier == 'uri'")
+                        if len(uri_md) > 0:
+                            self.item_id = uri_md["text_value"].values[0]
+                    logger.info(f"✓ API metadata retrieved and processed successfully")
+                    return self.metadata
+                else:
+                    logger.debug("✗ API returned empty metadata")
+                    api_metadata = None
             except Exception as e:
-                logger.error("Error connecting DB")
-                logger.error(e)
-        return self.metadata
+                logger.error(f"✗ Error retrieving metadata from API: {e}")
+                api_metadata = None
+        
+        # Try Database if API failed or not applicable
+        logger.debug("Attempting database connection...")
+        try:
+            self.connection = psycopg2.connect(
+                user=self.config["digital_csic"]["db_user"],
+                password=self.config["digital_csic"]["db_pass"],
+                host=self.config["digital_csic"]["db_host"],
+                port=self.config["digital_csic"]["db_port"],
+                database=self.config["digital_csic"]["db_db"],
+            )
+            logger.debug("✓ Database connection established")
+            
+            self.internal_id = self.get_internal_id(self.item_id, self.connection)
+            if self.id_type == "doi":
+                self.handle_id = self.get_handle_id(
+                    self.internal_id, self.connection
+                )
+            elif self.id_type == "internal":
+                self.handle_id = self.get_handle_id(
+                    self.internal_id, self.connection
+                )
+                self.item_id = self.handle_id
+
+            logger.debug(f"INTERNAL ID: {self.internal_id} ITEM ID: {self.item_id}")
+
+            self.metadata = self.get_metadata_db()
+            logger.debug("✓ Metadata retrieved from database successfully")
+            self.metadata.to_csv("metadata_testing.csv")
+            return self.metadata
+            
+        except Exception as e:
+            logger.error(f"✗ Error connecting to database: {type(e).__name__}: {e}")
+            raise Exception(f"Failed to retrieve metadata from API or Database: {e}")
 
     def get_metadata_api(self, api_endpoint, item_pid, item_type):
         if item_type == "doi":
@@ -200,25 +238,9 @@ class Plugin(EvaluatorBase):
             metadata = pd.DataFrame(
                 md, columns=["text_value", "metadata_schema", "element", "qualifier"]
             )
-            url = api_endpoint + "/rest/items/%s/bitstreams" % item_id
-            logger.debug("get_metadata_api GET / %s" % url)
-            for _ in range(MAX_RETRIES):
-                r = requests.get(url, headers=headers, verify=False, timeout=15)
-                if r.status_code == 200:
-                    break
-            file_list = []
-
-            for e in r.json():
-                file_list.append(
-                    [
-                        e["name"],
-                        e["name"].split(".")[-1],
-                        e["format"],
-                        api_endpoint + e["link"],
-                    ]
-                )
             file_list = pd.DataFrame(
-                file_list, columns=["name", "extension", "format", "link"]
+                self.resolve_item_files(item_pid, item_type),
+                columns=["name", "extension", "format", "link", "final_url"],
             )
         except Exception as e:
             logger.error(
@@ -228,6 +250,201 @@ class Plugin(EvaluatorBase):
             metadata = []
             file_list = []
         return metadata, file_list
+
+    def resolve_item_files(self, item_pid, item_type=None, api_endpoint="https://digital.csic.es"):
+        """Resolve DOI/handle in DIGITAL.CSIC and return attached files.
+
+        Returns a list of dicts with at least:
+          - name: filename
+          - final_url: final URL after redirects
+        Extra fields are kept for plugin compatibility:
+          - extension
+          - format
+          - link (bitstream endpoint URL)
+        """
+        if not item_pid:
+            return []
+
+        if item_type is None:
+            if ut.get_doi_str(item_pid) != "":
+                item_type = "doi"
+                item_pid = ut.get_doi_str(item_pid)
+            elif ut.get_handle_str(item_pid) != "":
+                item_type = "handle"
+                item_pid = ut.get_handle_str(item_pid)
+            else:
+                raise ValueError("Identifier must be a DOI or handle")
+
+        if item_type == "doi":
+            md_key = "dc.identifier.doi"
+            md_value = idutils.to_url(item_pid, "doi", "https")
+            identifier_url = md_value
+        elif item_type == "handle":
+            md_key = "dc.identifier.uri"
+            md_value = ut.pid_to_url(item_pid, "handle")
+            identifier_url = md_value
+        else:
+            raise ValueError("item_type must be 'doi' or 'handle'")
+
+        # 1) First attempt: Signposting on DOI/handle landing page.
+        files = self._resolve_item_files_signposting(identifier_url)
+        if len(files) > 0:
+            return files
+
+        # 2) Fallback: DIGITAL.CSIC REST API.
+        headers = {"accept": "application/json", "Content-Type": "application/json"}
+        find_url = api_endpoint + "/rest/items/find-by-metadata-field"
+        item_id = None
+
+        payloads = [{"key": md_key, "value": md_value}]
+        if item_type == "doi":
+            payloads.append({"key": md_key, "value": idutils.normalize_doi(md_value)})
+
+        for payload in payloads:
+            try:
+                response = requests.post(
+                    find_url,
+                    data=json.dumps(payload),
+                    headers=headers,
+                    verify=False,
+                    timeout=15,
+                )
+                if response.status_code != 200:
+                    continue
+                items = response.json()
+                if len(items) > 0:
+                    item_id = items[0].get("id")
+                    break
+            except Exception as e:
+                logger.error("resolve_item_files error resolving item id: %s", e)
+
+        if not item_id:
+            return []
+
+        bitstreams_url = api_endpoint + "/rest/items/%s/bitstreams" % item_id
+        try:
+            response = requests.get(
+                bitstreams_url, headers=headers, verify=False, timeout=15
+            )
+            if response.status_code != 200:
+                return []
+            bitstreams = response.json()
+        except Exception as e:
+            logger.error("resolve_item_files error getting bitstreams: %s", e)
+            return []
+
+        files = []
+        for bitstream in bitstreams:
+            link = api_endpoint + bitstream.get("link", "")
+            final_url = link
+            try:
+                resolved = requests.head(
+                    link, allow_redirects=True, verify=False, timeout=15
+                )
+                if resolved.status_code == 405:
+                    resolved = requests.get(
+                        link, allow_redirects=True, verify=False, timeout=15, stream=True
+                    )
+                if resolved.url:
+                    final_url = resolved.url
+            except Exception:
+                pass
+
+            name = bitstream.get("name", "")
+            files.append(
+                {
+                    "name": name,
+                    "extension": name.split(".")[-1] if "." in name else "",
+                    "format": bitstream.get("format", ""),
+                    "link": link,
+                    "final_url": final_url,
+                }
+            )
+
+        return files
+
+    def _resolve_item_files_signposting(self, identifier_url):
+        files = []
+        seen_urls = set()
+        link_headers = []
+
+        try:
+            response = requests.head(
+                identifier_url, allow_redirects=True, verify=False, timeout=15
+            )
+            if response.status_code == 405:
+                response = requests.get(
+                    identifier_url,
+                    allow_redirects=True,
+                    verify=False,
+                    timeout=15,
+                    stream=True,
+                )
+
+            raw_headers = None
+            if hasattr(response, "raw") and hasattr(response.raw, "headers"):
+                raw_headers = response.raw.headers
+
+            if raw_headers is not None:
+                if hasattr(raw_headers, "get_all"):
+                    link_headers.extend(raw_headers.get_all("Link") or [])
+                elif hasattr(raw_headers, "getlist"):
+                    link_headers.extend(raw_headers.getlist("Link") or [])
+
+            if response.headers.get("Link"):
+                link_headers.append(response.headers.get("Link"))
+        except Exception as e:
+            logger.error("resolve_item_files signposting request error: %s", e)
+            return []
+
+        for header_value in link_headers:
+            try:
+                parsed_links = requests.utils.parse_header_links(
+                    header_value.replace(">,<", ">, <")
+                )
+            except Exception:
+                parsed_links = []
+            for link_info in parsed_links:
+                rel = (link_info.get("rel") or "").strip().lower()
+                if "item" not in rel.split():
+                    continue
+
+                item_url = link_info.get("url", "")
+                if not item_url or item_url in seen_urls:
+                    continue
+                seen_urls.add(item_url)
+
+                final_url = item_url
+                try:
+                    resolved = requests.head(
+                        item_url, allow_redirects=True, verify=False, timeout=15
+                    )
+                    if resolved.status_code == 405:
+                        resolved = requests.get(
+                            item_url,
+                            allow_redirects=True,
+                            verify=False,
+                            timeout=15,
+                            stream=True,
+                        )
+                    if resolved.url:
+                        final_url = resolved.url
+                except Exception:
+                    pass
+
+                path = urllib.parse.urlparse(final_url).path
+                name = urllib.parse.unquote(path.split("/")[-1]) if path else ""
+                files.append(
+                    {
+                        "name": name,
+                        "extension": name.split(".")[-1] if "." in name else "",
+                        "format": link_info.get("type", ""),
+                        "link": item_url,
+                        "final_url": final_url,
+                    }
+                )
+
+        return files
 
     def get_metadata_db(self):
         query = (
@@ -279,7 +496,7 @@ class Plugin(EvaluatorBase):
         msg_list = []
         points = 0
 
-        term_data = kwargs["terms_access"]
+        term_data = self._get_config_term_from_kwargs(kwargs, "terms_access")
         term_metadata = term_data["metadata"]
 
         msg_st_list = []
@@ -342,7 +559,7 @@ class Plugin(EvaluatorBase):
 
         return (points, msg_list)
 
-    def rda_a1_03m(self):
+    def rda_a1_03m(self, **kwargs):
         """Indicator RDA-A1-03M Metadata identifier resolves to a metadata record
         This indicator is linked to the following principle: A1: (Meta)data are retrievable by their
         identifier using a standardised communication protocol.
@@ -408,7 +625,7 @@ class Plugin(EvaluatorBase):
             )
         return (points, msg_list)
 
-    def rda_a1_04m(self, return_protocol=False):
+    def rda_a1_04m(self, return_protocol=False, **kwargs):
         """Indicator RDA-A1-04M: Metadata is accessed through standarised protocol.
 
         This indicator is linked to the following principle: A1: (Meta)data are retrievable by their
@@ -444,7 +661,7 @@ class Plugin(EvaluatorBase):
 
         return (points, msg_list)
 
-    def rda_a1_03d(self):
+    def rda_a1_03d(self, **kwargs):
         """Indicator RDA-A1-01M.
 
         This indicator is linked to the following principle: A1: (Meta)data are retrievable by their
@@ -468,52 +685,219 @@ class Plugin(EvaluatorBase):
         """
         msg_list = []
         points = 0
-        try:
-            landing_url = urllib.parse.urlparse(self.oai_base).netloc
-            item_id_http = idutils.to_url(
-                self.item_id,
-                idutils.detect_identifier_schemes(self.item_id)[0],
-                url_scheme="http",
-            )
-            points, msg, data_files = self.find_dataset_file(
-                self.metadata, item_id_http, self.supported_data_formats
-            )
-            logger.debug(msg)
+        expected_files = []
 
-            headers = []
-            headers_text = ""
-            for f in data_files:
-                try:
-                    res = requests.head(
-                        "https://digital.csic.es" + f,
-                        verify=False,
-                        allow_redirects=True,
-                    )
-                    if res.status_code == 200:
-                        headers.append(res.headers)
-                        headers_text = headers_text + "%s ; " % f
-                except Exception as e:
-                    logger.error(e)
-            if len(headers) > 0:
-                points = 100
+        try:
+            # (1) Ensure file list is available in the object.
+            if self.file_list is None or len(self.file_list) == 0:
+                logger.debug("A1-03D: file_list not available. Resolving files from PID")
+                resolved_files = self.resolve_item_files(self.item_id, self.id_type)
+                self.file_list = pd.DataFrame(
+                    resolved_files,
+                    columns=["name", "extension", "format", "link", "final_url"],
+                )
                 msg_list.append(
                     {
-                        "message": _("Data can be downloaded") + ": %s" % headers_text,
-                        "points": points,
+                        "message": _(
+                            "Resolved file list from PID. Files found"
+                        )
+                        + ": %s" % len(self.file_list),
+                        "points": 0,
                     }
                 )
             else:
-                points = 0
-                msg_list.append(
-                    {"message": _("Data can not be downloaded"), "points": points}
+                logger.debug(
+                    "A1-03D: using existing file_list with %s entries",
+                    len(self.file_list),
                 )
 
+            if "final_url" in self.file_list.columns:
+                expected_files = self.file_list.to_dict("records")
+            else:
+                expected_files = self.file_list.to_dict("records")
+
+            if len(expected_files) == 0:
+                msg_list.append(
+                    {
+                        "message": _("No files available to evaluate manual download"),
+                        "points": points,
+                    }
+                )
+                return points, msg_list
+
+            # (2) Resolve persistent identifier to landing page.
+            id_scheme = idutils.detect_identifier_schemes(self.item_id)[0]
+            pid_url = idutils.to_url(self.item_id, id_scheme, url_scheme="https")
+            landing_response = requests.get(
+                pid_url, allow_redirects=True, verify=False, timeout=20
+            )
+            landing_url = landing_response.url
+            logger.debug("A1-03D: PID URL %s resolved to landing %s", pid_url, landing_url)
+            msg_list.append(
+                {
+                    "message": _("PID resolves to landing page") + ": %s" % landing_url,
+                    "points": 0,
+                }
+            )
+
+            # (3) Human-like HTML check: file links must be present in landing page.
+            soup = BeautifulSoup(landing_response.text, features="html.parser")
+            html_links = set()
+            html_texts = []
+            for tag in soup.find_all("a"):
+                href = tag.get("href")
+                if href:
+                    abs_link = urllib.parse.urljoin(landing_url, href)
+                    html_links.add(abs_link)
+                    html_links.add(urllib.parse.unquote(abs_link))
+                txt = (tag.get_text() or "").strip()
+                if txt:
+                    html_texts.append(txt)
+
+            logger.debug("A1-03D: extracted %s anchors from landing page", len(html_links))
+            msg_list.append(
+                {
+                    "message": _("Links discovered in landing page HTML")
+                    + ": %s" % len(html_links),
+                    "points": 0,
+                }
+            )
+
+            accessible_count = 0
+            matched_count = 0
+            for row in expected_files:
+                name = row.get("name", "")
+                link = row.get("link", "")
+                final_url = row.get("final_url", "")
+
+                candidates = set()
+                if link:
+                    candidates.add(link)
+                    candidates.add(urllib.parse.unquote(link))
+                if final_url:
+                    candidates.add(final_url)
+                    candidates.add(urllib.parse.unquote(final_url))
+
+                # Match by URL in href or by visible text/file name.
+                match_url = None
+                for c in candidates:
+                    if c in html_links:
+                        match_url = c
+                        break
+                if match_url is None and name:
+                    encoded_name = urllib.parse.quote(name)
+                    for h in html_links:
+                        if name in h or encoded_name in h:
+                            match_url = h
+                            break
+                    if match_url is None:
+                        for t in html_texts:
+                            if name in t:
+                                match_url = landing_url
+                                break
+
+                if match_url is None:
+                    logger.debug("A1-03D: file not found in landing HTML: %s", name)
+                    msg_list.append(
+                        {
+                            "message": _("File not present in landing page HTML")
+                            + ": %s" % name,
+                            "points": 0,
+                        }
+                    )
+                    continue
+
+                matched_count += 1
+                logger.debug("A1-03D: file found in landing HTML: %s -> %s", name, match_url)
+                msg_list.append(
+                    {
+                        "message": _("File present in landing page HTML")
+                        + ": %s -> %s" % (name, match_url),
+                        "points": 0,
+                    }
+                )
+
+                # (4) Verify manual download URL accessibility.
+                try:
+                    check = requests.head(
+                        match_url, allow_redirects=True, verify=False, timeout=20
+                    )
+                    if check.status_code == 405:
+                        check = requests.get(
+                            match_url,
+                            allow_redirects=True,
+                            verify=False,
+                            timeout=20,
+                            stream=True,
+                        )
+                    if check.status_code == 200:
+                        accessible_count += 1
+                        logger.debug(
+                            "A1-03D: file is manually downloadable: %s (%s)",
+                            name,
+                            check.url,
+                        )
+                        msg_list.append(
+                            {
+                                "message": _("File is manually downloadable")
+                                + ": %s" % name,
+                                "points": 0,
+                            }
+                        )
+                    else:
+                        logger.debug(
+                            "A1-03D: file is not downloadable (HTTP %s): %s",
+                            check.status_code,
+                            name,
+                        )
+                        msg_list.append(
+                            {
+                                "message": _("File is not manually downloadable")
+                                + ": %s (HTTP %s)" % (name, check.status_code),
+                                "points": 0,
+                            }
+                        )
+                except Exception as e:
+                    logger.error("A1-03D: error checking file download %s: %s", name, e)
+                    msg_list.append(
+                        {
+                            "message": _("Error checking manual download")
+                            + ": %s" % name,
+                            "points": 0,
+                        }
+                    )
+
+            total_files = len(expected_files)
+            if total_files > 0:
+                points = (accessible_count * 100) / total_files
+            else:
+                points = 0
+
+            logger.debug(
+                "A1-03D: summary total=%s matched_in_html=%s downloadable=%s points=%s",
+                total_files,
+                matched_count,
+                accessible_count,
+                points,
+            )
+            msg_list.append(
+                {
+                    "message": _("Manual download summary")
+                    + ": total=%s, in_html=%s, downloadable=%s"
+                    % (total_files, matched_count, accessible_count),
+                    "points": points,
+                }
+            )
+
         except Exception as e:
-            logger.error(e)
+            logger.error("A1-03D evaluation error: %s", e)
+            msg_list.append(
+                {"message": _("Error evaluating manual downloadability"), "points": 0}
+            )
 
         return points, msg_list
 
-    def rda_a1_05d(self):
+    def rda_a1_05d(self, **kwargs):
         """Indicator RDA-A1-01M
         This indicator is linked to the following principle: A1: (Meta)data are retrievable by their
         identifier using a standardised communication protocol. More information about that
@@ -585,7 +969,7 @@ class Plugin(EvaluatorBase):
 
         return points, msg_list
 
-    def rda_a1_2_01d(self):
+    def rda_a1_2_01d(self, **kwargs):
         """Indicator RDA-A1-01M
         This indicator is linked to the following principle: A1.2: The protocol allows for an
         authentication and authorisation where necessary. More information about that principle
@@ -612,7 +996,7 @@ class Plugin(EvaluatorBase):
 
         return points, [{"message": msg, "points": points}]
 
-    def rda_a2_01m(self):
+    def rda_a2_01m(self, **kwargs):
         """Indicator RDA-A1-01M
         This indicator is linked to the following principle: A2: Metadata should be accessible even
         when the data is no longer available. More information about that principle can be found
@@ -641,7 +1025,7 @@ class Plugin(EvaluatorBase):
 
         # INTEROPERABLE
 
-    def rda_i1_01d(self):
+    def rda_i1_01d(self, **kwargs):
         """Indicator RDA-A1-01M
         This indicator is linked to the following principle: I1: (Meta)data use a formal, accessible,
         shared, and broadly applicable language for knowledge representation. More information
@@ -737,7 +1121,7 @@ class Plugin(EvaluatorBase):
 
         return (points, msg_list)
 
-    def rda_i1_02m(self):
+    def rda_i1_02m(self, **kwargs):
         """Indicator RDA-A1-01M
         This indicator is linked to the following principle: I1: (Meta)data use a formal, accessible,
         shared, and broadly applicable language for knowledge representation. More information
@@ -799,9 +1183,10 @@ class Plugin(EvaluatorBase):
         points = 0
         msg_list = []
 
-        term_data = kwargs["terms_qualified_references"]
+        term_data = self._get_config_term_from_kwargs(
+            kwargs, "terms_qualified_references"
+        )
         term_metadata = term_data["metadata"]
-        id_list = []
         try:
             for index, row in term_metadata.iterrows():
                 if ut.check_standard_project_relation(row["text_value"]):
@@ -853,9 +1238,8 @@ class Plugin(EvaluatorBase):
         points = 0
         msg_list = []
 
-        term_data = kwargs["terms_relations"]
+        term_data = self._get_config_term_from_kwargs(kwargs, "terms_relations")
         term_metadata = term_data["metadata"]
-        id_list = []
         try:
             for index, row in term_metadata.iterrows():
                 if ut.check_standard_project_relation(row["text_value"]):
@@ -894,7 +1278,8 @@ class Plugin(EvaluatorBase):
             logger.error("Error in I3_02M: %s" % e)
         return (points, msg_list)
 
-    def rda_i3_02d(self):
+    @ConfigTerms(term_id="terms_relations")
+    def rda_i3_02d(self, **kwargs):
         """Indicator RDA-A1-01M
         This indicator is linked to the following principle: I3: (Meta)data include qualified references
         to other (meta)data. More information about that principle can be found here.
@@ -915,9 +1300,10 @@ class Plugin(EvaluatorBase):
         msg
             Message with the results or recommendations to improve this indicator
         """
-        return self.rda_i3_02m()
+        return self.rda_i3_02m(**kwargs)
 
-    def rda_i3_03m(self):
+    @ConfigTerms(term_id="terms_relations")
+    def rda_i3_03m(self, **kwargs):
         """Indicator RDA-I3-03M
         This indicator is linked to the following principle: I3: (Meta)data include qualified references
         to other (meta)data. More information about that principle can be found here.
@@ -938,7 +1324,7 @@ class Plugin(EvaluatorBase):
         msg
             Message with the results or recommendations to improve this indicator
         """
-        return self.rda_i3_02m()
+        return self.rda_i3_02m(**kwargs)
 
     def rda_r1_1_03m(self, machine_readable=True, **kwargs):
         """Indicator R1.1-03M: Metadata refers to a machine-understandable reuse
@@ -983,7 +1369,7 @@ class Plugin(EvaluatorBase):
         points = 0
         msg_list = []
 
-        term_data = kwargs["prov_terms"]
+        term_data = self._get_config_term_from_kwargs(kwargs, "prov_terms")
         logger.debug(term_data)
         term_metadata = term_data["metadata"]
         logger.debug(term_metadata.element)
@@ -1016,7 +1402,7 @@ class Plugin(EvaluatorBase):
             )
         return (points, msg_list)
 
-    def rda_r1_3_01m(self):
+    def rda_r1_3_01m(self, **kwargs):
         """Indicator RDA-A1-01M
         This indicator is linked to the following principle: R1.3: (Meta)data meet domain-relevant
         community standards.
@@ -1086,7 +1472,7 @@ class Plugin(EvaluatorBase):
         """
         return self.rda_i1_01d()
 
-    def rda_r1_3_02m(self):
+    def rda_r1_3_02m(self, **kwargs):
         """Indicator RDA-A1-01M
         This indicator is linked to the following principle: R1.3: (Meta)data meet domain-relevant
         community standards. More information about that principle can be found here.
@@ -1171,6 +1557,22 @@ class Plugin(EvaluatorBase):
                 handle_id = row[0]
 
         return ut.get_handle_str(handle_id)
+
+    def _get_config_term_from_kwargs(self, kwargs, term_id):
+        """Normalize ConfigTerms payload from kwargs to avoid KeyError."""
+        empty_md = pd.DataFrame(
+            columns=["text_value", "metadata_schema", "element", "qualifier"]
+        )
+        term_data = kwargs.get(term_id, {}) if isinstance(kwargs, dict) else {}
+        if not isinstance(term_data, dict):
+            term_data = {}
+        term_metadata = term_data.get("metadata", empty_md)
+        if term_metadata is None:
+            term_metadata = empty_md
+        term_list = term_data.get("list", [])
+        if term_list is None:
+            term_list = []
+        return {"metadata": term_metadata, "list": term_list}
 
     def metadata_prefix_to_uri(self, prefix):
         uri = prefix
