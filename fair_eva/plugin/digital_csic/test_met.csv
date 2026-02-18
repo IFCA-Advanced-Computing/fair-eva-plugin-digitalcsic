@@ -1,0 +1,44 @@
+text_value,metadata_schema,element,qualifier
+"Serrano del Rosal, Rafael",http://purl.org/dc/elements/1.1/,contributor,author
+"Biedma Velázquez, Lourdes",http://purl.org/dc/elements/1.1/,contributor,author
+"García Rodríguez, M. Isabel",http://purl.org/dc/elements/1.1/,contributor,author
+"Serrano Gemes, Gema",http://purl.org/dc/elements/1.1/,contributor,author
+"Cerrillo Vidal, José Antonio",http://purl.org/dc/elements/1.1/,contributor,author
+"García González, Juan Manuel",http://purl.org/dc/elements/1.1/,contributor,author
+"Blanco Hungría, Antonio",http://purl.org/dc/elements/1.1/,contributor,author
+https://www.geonames.org/2510769/kingdom-of-spain.html,http://purl.org/dc/elements/1.1/,coverage,spatial
+name=Spain; lat=40; long=-4,http://purl.org/dc/elements/1.1/,coverage,spatial
+start=2021-05-31; end=2021-06-18,http://purl.org/dc/elements/1.1/,coverage,temporal
+2025-04-03T13:28:23Z,http://purl.org/dc/elements/1.1/,date,accessioned
+2025-04-03T13:28:23Z,http://purl.org/dc/elements/1.1/,date,available
+2025-04-03,http://purl.org/dc/elements/1.1/,date,issued
+"Serrano del Rosal, Rafael; Biedma Velázquez, Lourdes; García Rodríguez, Mª Isabel; Serrano Gemes, Gema; Cerrillo Vidal, José Antonio; García González, Juan Manuel; Blanco Hungría, Antonio; 2025; Social Legitimacy of Pain (SOLEPA). Survey Study [Dataset]; DIGITAL.CSIC; https://doi.org/10.20350/digitalCSIC/17221",http://purl.org/dc/elements/1.1/,identifier,citation
+http://hdl.handle.net/10261/385628,http://purl.org/dc/elements/1.1/,identifier,uri
+"[Description of methods used for collection/generation of data] UNIVERSE: Population residing in Spain aged 18 and over. FRAME: 40dB panel. SAMPLE SIZE: 1,600 interviews. DATA COLLECTION: The sample has been selected among the people belonging to the Panel. SAMPLE TYPE: Stratified selection by age group, sex and educational level of the Panel members, with the strata being proportional to the national population over 18 years of age. AVERAGE INTERVIEW TIME: 13.8 minutes.",http://purl.org/dc/elements/1.1/,description,
+"[Methods for processing the data] The treatment of the information collected consisted of debugging the data, correcting errors and detecting anomalous data. Data recording was automatic and coding of open-ended questions was done manually. The evaluation of the fieldwork was continued by reviewing the compliance of the sample, analysis and treatment of non-response.",http://purl.org/dc/elements/1.1/,description,
+The codebook is available in Spanish and in English translation.,http://purl.org/dc/elements/1.1/,description,
+"[EN] The ""Social Legitimacy of Pain"" project aims to delve into the understanding of pain from a social perspective.",http://purl.org/dc/elements/1.1/,description,abstract
+"[ES] El proyecto “Legitimidad social del Dolor”, tiene por objeto ahondar en el conocimiento del dolor desde una perspectiva social.",http://purl.org/dc/elements/1.1/,description,abstract
+Funded by the State Program for I+D+i Oriented to the Challenges of Society (RTI2018-099483-B-I00).,http://purl.org/dc/elements/1.1/,description,sponsorship
+PAIN_Data file.csv PAIN_Data file.sav PAIN_Codebook_EN.pdf PAIN_Codebook_SP.pdf PAIN_Readme_EN.pdf PAIN_Readme_SP.pdf PAIN_Questionnaire.pdf,http://purl.org/dc/elements/1.1/,description,tableofcontents
+sav,http://purl.org/dc/elements/1.1/,format,
+application/pdf,http://purl.org/dc/elements/1.1/,format,
+text/csv,http://purl.org/dc/elements/1.1/,format,
+eng,http://purl.org/dc/elements/1.1/,language,iso
+DIGITAL.CSIC,http://purl.org/dc/elements/1.1/,publisher,
+info:eu-repo/grantAgreement/AEI/,http://purl.org/dc/elements/1.1/,relation,
+openAccess,http://purl.org/dc/elements/1.1/,rights,
+Dolor,http://purl.org/dc/elements/1.1/,subject,
+Legitimidad,http://purl.org/dc/elements/1.1/,subject,
+Dolor social,http://purl.org/dc/elements/1.1/,subject,
+Bienestar,http://purl.org/dc/elements/1.1/,subject,
+Percepción,http://purl.org/dc/elements/1.1/,subject,
+Salud,http://purl.org/dc/elements/1.1/,subject,
+Pain,http://purl.org/dc/elements/1.1/,subject,
+Legitimacy,http://purl.org/dc/elements/1.1/,subject,
+Social pain,http://purl.org/dc/elements/1.1/,subject,
+Health,http://purl.org/dc/elements/1.1/,subject,
+Social Legitimacy of Pain (SOLEPA). Survey Study,http://purl.org/dc/elements/1.1/,title,
+Legitimidad Social del Dolor (SOLEPA). Estudio por encuesta,http://purl.org/dc/elements/1.1/,title,alternative
+dataset,http://purl.org/dc/elements/1.1/,type,
+https://doi.org/10.20350/digitalCSIC/17221,http://purl.org/dc/elements/1.1/,identifier,doi

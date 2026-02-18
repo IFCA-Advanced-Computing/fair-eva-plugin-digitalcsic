@@ -16,6 +16,7 @@ import psycopg2
 import requests
 from bs4 import BeautifulSoup
 from fair_eva.api.evaluator import ConfigTerms, EvaluatorBase
+from urllib3.exceptions import InsecureRequestWarning
 
 logging.basicConfig(
     stream=sys.stdout, level=logging.DEBUG, format="'%(name)s:%(lineno)s' | %(message)s"
@@ -81,9 +82,13 @@ class Plugin(EvaluatorBase):
         self.metadata_quality = 100  # Value for metadata balancing
 
     def get_metadata(self):
-        cfg = self.config.get(self.name, {}) if isinstance(self.config, dict) else {}
-        test_mode = self.config[self.name]["test_mode"]
-        test_file = self.config[self.name]["test_metadata_file"]
+        try:
+            section = self.config[self.name]
+            test_mode = section.getboolean("test_mode", fallback=False)
+            test_file = section.get("test_metadata_file", "")
+        except Exception:
+            test_mode = False
+            test_file = ""
         
         # MODE 1: TEST MODE - Load only from CSV test file
         if test_mode:
@@ -291,37 +296,52 @@ class Plugin(EvaluatorBase):
         if len(files) > 0:
             return files
 
+        # 1b) Fallback: parse landing page links to /bitstream/.
+        files = self._resolve_item_files_landing_html(identifier_url)
+        if len(files) > 0:
+            return files
+
         # 2) Fallback: DIGITAL.CSIC REST API.
         headers = {"accept": "application/json", "Content-Type": "application/json"}
-        find_url = api_endpoint + "/rest/items/find-by-metadata-field"
         item_id = None
+        api_endpoints = [api_endpoint]
+        if api_endpoint.startswith("https://"):
+            api_endpoints.append(api_endpoint.replace("https://", "http://", 1))
+        elif api_endpoint.startswith("http://"):
+            api_endpoints.append(api_endpoint.replace("http://", "https://", 1))
 
         payloads = [{"key": md_key, "value": md_value}]
         if item_type == "doi":
             payloads.append({"key": md_key, "value": idutils.normalize_doi(md_value)})
 
-        for payload in payloads:
-            try:
-                response = requests.post(
-                    find_url,
-                    data=json.dumps(payload),
-                    headers=headers,
-                    verify=False,
-                    timeout=15,
-                )
-                if response.status_code != 200:
-                    continue
-                items = response.json()
-                if len(items) > 0:
-                    item_id = items[0].get("id")
-                    break
-            except Exception as e:
-                logger.error("resolve_item_files error resolving item id: %s", e)
+        working_endpoint = None
+        for base_endpoint in api_endpoints:
+            find_url = base_endpoint + "/rest/items/find-by-metadata-field"
+            for payload in payloads:
+                try:
+                    response = requests.post(
+                        find_url,
+                        data=json.dumps(payload),
+                        headers=headers,
+                        verify=False,
+                        timeout=15,
+                    )
+                    if response.status_code != 200:
+                        continue
+                    items = response.json()
+                    if len(items) > 0:
+                        item_id = items[0].get("id")
+                        working_endpoint = base_endpoint
+                        break
+                except Exception as e:
+                    logger.error("resolve_item_files error resolving item id: %s", e)
+            if item_id:
+                break
 
         if not item_id:
             return []
 
-        bitstreams_url = api_endpoint + "/rest/items/%s/bitstreams" % item_id
+        bitstreams_url = working_endpoint + "/rest/items/%s/bitstreams" % item_id
         try:
             response = requests.get(
                 bitstreams_url, headers=headers, verify=False, timeout=15
@@ -335,16 +355,12 @@ class Plugin(EvaluatorBase):
 
         files = []
         for bitstream in bitstreams:
-            link = api_endpoint + bitstream.get("link", "")
+            link = working_endpoint + bitstream.get("link", "")
             final_url = link
             try:
-                resolved = requests.head(
-                    link, allow_redirects=True, verify=False, timeout=15
+                resolved = requests.get(
+                    link, allow_redirects=True, verify=False, timeout=15, stream=True
                 )
-                if resolved.status_code == 405:
-                    resolved = requests.get(
-                        link, allow_redirects=True, verify=False, timeout=15, stream=True
-                    )
                 if resolved.url:
                     final_url = resolved.url
             except Exception:
@@ -369,17 +385,14 @@ class Plugin(EvaluatorBase):
         link_headers = []
 
         try:
-            response = requests.head(
-                identifier_url, allow_redirects=True, verify=False, timeout=15
+            response = requests.get(
+                identifier_url,
+                allow_redirects=True,
+                verify=False,
+                timeout=15,
+                stream=True,
+                headers={"User-Agent": "Mozilla/5.0"},
             )
-            if response.status_code == 405:
-                response = requests.get(
-                    identifier_url,
-                    allow_redirects=True,
-                    verify=False,
-                    timeout=15,
-                    stream=True,
-                )
 
             raw_headers = None
             if hasattr(response, "raw") and hasattr(response.raw, "headers"):
@@ -416,17 +429,13 @@ class Plugin(EvaluatorBase):
 
                 final_url = item_url
                 try:
-                    resolved = requests.head(
-                        item_url, allow_redirects=True, verify=False, timeout=15
+                    resolved = requests.get(
+                        item_url,
+                        allow_redirects=True,
+                        verify=False,
+                        timeout=15,
+                        stream=True,
                     )
-                    if resolved.status_code == 405:
-                        resolved = requests.get(
-                            item_url,
-                            allow_redirects=True,
-                            verify=False,
-                            timeout=15,
-                            stream=True,
-                        )
                     if resolved.url:
                         final_url = resolved.url
                 except Exception:
@@ -443,6 +452,51 @@ class Plugin(EvaluatorBase):
                         "final_url": final_url,
                     }
                 )
+
+        return files
+
+    def _resolve_item_files_landing_html(self, identifier_url):
+        files = []
+        seen = set()
+        try:
+            response = requests.get(
+                identifier_url,
+                allow_redirects=True,
+                verify=False,
+                timeout=20,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if response.status_code != 200:
+                return []
+
+            soup = BeautifulSoup(response.text, features="html.parser")
+            landing_url = response.url
+            for tag in soup.find_all("a"):
+                href = tag.get("href")
+                if not href:
+                    continue
+                abs_url = urllib.parse.urljoin(landing_url, href)
+                if "/bitstream/" not in abs_url:
+                    continue
+                clean_url = urllib.parse.unquote(abs_url)
+                if clean_url in seen:
+                    continue
+                seen.add(clean_url)
+
+                path = urllib.parse.urlparse(clean_url).path
+                name = urllib.parse.unquote(path.split("/")[-1]) if path else ""
+                files.append(
+                    {
+                        "name": name,
+                        "extension": name.split(".")[-1] if "." in name else "",
+                        "format": "",
+                        "link": clean_url,
+                        "final_url": clean_url,
+                    }
+                )
+        except Exception as e:
+            logger.error("resolve_item_files landing html error: %s", e)
+            return []
 
         return files
 
@@ -509,21 +563,34 @@ class Plugin(EvaluatorBase):
         msg_list.append({"message": msg_st_list, "points": points})
 
         # 2 - Parse HTML in order to find the data file
-        item_id_http = idutils.to_url(
-            self.item_id,
-            idutils.detect_identifier_schemes(self.item_id)[0],
-            url_scheme="http",
-        )
-        resp = requests.head(item_id_http, allow_redirects=False, verify=False)
-        if resp.status_code == 302:
-            item_id_http = resp.headers["Location"]
-        resp = requests.head(item_id_http + "?mode=full", verify=False)
-        if resp.status_code == 200:
-            item_id_http = item_id_http + "?mode=full"
+        try:
+            schemes = idutils.detect_identifier_schemes(self.item_id)
+            if not schemes:
+                raise ValueError("Could not detect identifier scheme")
+            item_id_http = idutils.to_url(self.item_id, schemes[0], url_scheme="http")
 
-        msg_2, points_2, data_files = self.find_dataset_file(
-            self.metadata, item_id_http, self.supported_data_formats
-        )
+            resp = requests.head(
+                item_id_http, allow_redirects=False, verify=False, timeout=15
+            )
+            if resp.status_code == 302:
+                item_id_http = resp.headers["Location"]
+            resp = requests.head(item_id_http + "?mode=full", verify=False, timeout=15)
+            if resp.status_code == 200:
+                item_id_http = item_id_http + "?mode=full"
+
+            msg_2, points_2, data_files = self.find_dataset_file(
+                self.metadata, item_id_http, self.supported_data_formats
+            )
+        except Exception as e:
+            logger.error("A1_01M manual access check failed: %s", e)
+            msg_list.append(
+                {
+                    "message": _("Manual data access check could not be completed")
+                    + ": %s" % e,
+                    "points": points,
+                }
+            )
+            return (points, msg_list)
         if points_2 == 100 and points == 100:
             msg_list.append(
                 {
@@ -1373,7 +1440,8 @@ class Plugin(EvaluatorBase):
         logger.debug(term_data)
         term_metadata = term_data["metadata"]
         logger.debug(term_metadata.element)
-        id_list = []
+        provenance_points = 0
+        readme_points = 0
         try:
             for index, row in term_metadata.iterrows():
                 _points = 100
@@ -1381,25 +1449,172 @@ class Plugin(EvaluatorBase):
                     {
                         "message": _("Provenance info found")
                         + ": %s" % (row["text_value"]),
-                        "points": _points,
-                    }
-                )
-            points = (
+                            "points": _points,
+                        }
+                    )
+            provenance_points = (
                 100 * len(term_metadata[["element", "qualifier"]].drop_duplicates())
             ) / len(term_data["list"])
 
         except Exception as e:
             logger.error("Error in I3_02M: %s" % e)
 
-        if points == 0:
+        if provenance_points == 0:
             msg_list.append(
                 {
                     "message": _(
                         "Provenance information can not be found. Please, include the info in config.ini"
                     ),
-                    "points": points,
+                    "points": provenance_points,
                 }
             )
+
+        # Additional provenance evidence at file level: README must exist and be non-empty.
+        try:
+            if self.file_list is None or len(self.file_list) == 0:
+                resolved_files = self.resolve_item_files(self.item_id, self.id_type)
+                self.file_list = pd.DataFrame(
+                    resolved_files,
+                    columns=["name", "extension", "format", "link", "final_url"],
+                )
+
+            readme_candidate = None
+            allowed_text_ext = {
+                "",
+                "txt",
+                "md",
+                "rst",
+                "adoc",
+                "text",
+                "csv",
+                "tsv",
+                "json",
+                "yaml",
+                "yml",
+                "xml",
+            }
+            def _candidate_names_from_row(file_row):
+                names = []
+                direct_name = str(file_row.get("name", "") or "").strip()
+                if direct_name:
+                    names.append(direct_name)
+
+                for key in ("final_url", "link"):
+                    raw_url = str(file_row.get(key, "") or "").strip()
+                    if not raw_url:
+                        continue
+                    path = urllib.parse.urlparse(raw_url).path
+                    if path:
+                        url_name = urllib.parse.unquote(path.split("/")[-1]).strip()
+                        if url_name:
+                            names.append(url_name)
+
+                return names
+
+            def _is_readme_text_file(file_row):
+                # Accept README/readme/Readme with optional text extension.
+                ext_field = str(file_row.get("extension", "") or "").strip().lower()
+                for candidate in _candidate_names_from_row(file_row):
+                    lowered = candidate.lower().strip()
+                    base, ext = os.path.splitext(lowered)
+                    ext = ext.lstrip(".").strip()
+                    if base == "readme" and (ext in allowed_text_ext):
+                        return True
+                    if base == "readme" and ext_field in allowed_text_ext:
+                        return True
+                return False
+
+            if self.file_list is not None and len(self.file_list) > 0:
+                for row_idx, row in self.file_list.iterrows():
+                    if _is_readme_text_file(row):
+                        readme_candidate = row
+                        break
+
+            if readme_candidate is None:
+                msg_list.append(
+                    {
+                        "message": _(
+                            "README file not found in digital object files"
+                        ),
+                        "points": 0,
+                    }
+                )
+            else:
+                readme_url = readme_candidate.get("final_url") or readme_candidate.get(
+                    "link"
+                )
+                readme_name = readme_candidate.get("name", "README")
+                if not readme_url:
+                    msg_list.append(
+                        {
+                            "message": _("README found but no downloadable URL")
+                            + ": %s" % readme_name,
+                            "points": 0,
+                        }
+                    )
+                else:
+                    non_empty = False
+                    requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+
+                    readme_url =readme_url.replace("https", "http")
+
+                    # 2. Añadimos un User-Agent para que el proxy no nos bloquee por "parecer un bot"
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
+
+                    # Mantenemos HTTPS, pero con verify=False
+                    response = requests.get(
+                        readme_url, 
+                        verify=False, 
+                        timeout=20, 
+                        stream=True, 
+                        headers=headers
+                    )
+                    response.raise_for_status() # Lanza excepción si hay error 4xx o 5xx
+                    
+                    print("Conexión establecida con éxito.")
+                    if response.status_code == 200:
+                        content_len = response.headers.get("Content-Length")
+                        if content_len:
+                            try:
+                                non_empty = int(content_len) > 0
+                            except Exception:
+                                non_empty = False
+                        if not non_empty:
+                            for chunk in response.iter_content(chunk_size=1024):
+                                if chunk and chunk.strip():
+                                    non_empty = True
+                                    break
+
+                    if non_empty:
+                        readme_points = 100
+                        msg_list.append(
+                            {
+                                "message": _("README file found and not empty")
+                                + ": %s" % readme_name,
+                                "points": 100,
+                            }
+                        )
+                    else:
+                        msg_list.append(
+                            {
+                                "message": _("README file is empty or inaccessible")
+                                + ": %s" % readme_name,
+                                "points": 0,
+                            }
+                        )
+        except Exception as e:
+            logger.error("Error checking README file for provenance: %s", e)
+            msg_list.append(
+                {
+                    "message": _("Error checking README file for provenance")
+                    + ": %s" % e,
+                    "points": 0,
+                }
+            )
+
+        points = min(provenance_points, readme_points)
         return (points, msg_list)
 
     def rda_r1_3_01m(self, **kwargs):
