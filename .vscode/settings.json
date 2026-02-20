@@ -1,0 +1,4 @@
+{
+    "python.defaultInterpreterPath": "/datos/dev/venv-fair-eva-client/bin/python",
+    "python.terminal.activateEnvironment": true
+}

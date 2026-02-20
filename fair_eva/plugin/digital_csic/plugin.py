@@ -16,6 +16,7 @@ import psycopg2
 import requests
 from bs4 import BeautifulSoup
 from fair_eva.api.evaluator import ConfigTerms, EvaluatorBase
+from urllib3.exceptions import InsecureRequestWarning
 
 logging.basicConfig(
     stream=sys.stdout, level=logging.DEBUG, format="'%(name)s:%(lineno)s' | %(message)s"
@@ -42,7 +43,7 @@ class Plugin(EvaluatorBase):
     def __init__(
         self,
         item_id,
-        api_endpoint="http://digital.csic.es/dspace-oai/request",
+        api_endpoint="https://digital.csic.es/dspace-oai/request",
         lang="en",
         config=None,
         name="digital_csic",
@@ -81,9 +82,13 @@ class Plugin(EvaluatorBase):
         self.metadata_quality = 100  # Value for metadata balancing
 
     def get_metadata(self):
-        cfg = self.config.get(self.name, {}) if isinstance(self.config, dict) else {}
-        test_mode = self.config[self.name]["test_mode"]
-        test_file = self.config[self.name]["test_metadata_file"]
+        try:
+            section = self.config[self.name]
+            test_mode = section.getboolean("test_mode", fallback=False)
+            test_file = section.get("test_metadata_file", "")
+        except Exception:
+            test_mode = False
+            test_file = ""
         
         # MODE 1: TEST MODE - Load only from CSV test file
         if test_mode:
@@ -291,37 +296,52 @@ class Plugin(EvaluatorBase):
         if len(files) > 0:
             return files
 
+        # 1b) Fallback: parse landing page links to /bitstream/.
+        files = self._resolve_item_files_landing_html(identifier_url)
+        if len(files) > 0:
+            return files
+
         # 2) Fallback: DIGITAL.CSIC REST API.
         headers = {"accept": "application/json", "Content-Type": "application/json"}
-        find_url = api_endpoint + "/rest/items/find-by-metadata-field"
         item_id = None
+        api_endpoints = [api_endpoint]
+        if api_endpoint.startswith("https://"):
+            api_endpoints.append(api_endpoint.replace("https://", "http://", 1))
+        elif api_endpoint.startswith("http://"):
+            api_endpoints.append(api_endpoint.replace("http://", "https://", 1))
 
         payloads = [{"key": md_key, "value": md_value}]
         if item_type == "doi":
             payloads.append({"key": md_key, "value": idutils.normalize_doi(md_value)})
 
-        for payload in payloads:
-            try:
-                response = requests.post(
-                    find_url,
-                    data=json.dumps(payload),
-                    headers=headers,
-                    verify=False,
-                    timeout=15,
-                )
-                if response.status_code != 200:
-                    continue
-                items = response.json()
-                if len(items) > 0:
-                    item_id = items[0].get("id")
-                    break
-            except Exception as e:
-                logger.error("resolve_item_files error resolving item id: %s", e)
+        working_endpoint = None
+        for base_endpoint in api_endpoints:
+            find_url = base_endpoint + "/rest/items/find-by-metadata-field"
+            for payload in payloads:
+                try:
+                    response = requests.post(
+                        find_url,
+                        data=json.dumps(payload),
+                        headers=headers,
+                        verify=False,
+                        timeout=15,
+                    )
+                    if response.status_code != 200:
+                        continue
+                    items = response.json()
+                    if len(items) > 0:
+                        item_id = items[0].get("id")
+                        working_endpoint = base_endpoint
+                        break
+                except Exception as e:
+                    logger.error("resolve_item_files error resolving item id: %s", e)
+            if item_id:
+                break
 
         if not item_id:
             return []
 
-        bitstreams_url = api_endpoint + "/rest/items/%s/bitstreams" % item_id
+        bitstreams_url = working_endpoint + "/rest/items/%s/bitstreams" % item_id
         try:
             response = requests.get(
                 bitstreams_url, headers=headers, verify=False, timeout=15
@@ -335,16 +355,12 @@ class Plugin(EvaluatorBase):
 
         files = []
         for bitstream in bitstreams:
-            link = api_endpoint + bitstream.get("link", "")
+            link = working_endpoint + bitstream.get("link", "")
             final_url = link
             try:
-                resolved = requests.head(
-                    link, allow_redirects=True, verify=False, timeout=15
+                resolved = requests.get(
+                    link, allow_redirects=True, verify=False, timeout=15, stream=True
                 )
-                if resolved.status_code == 405:
-                    resolved = requests.get(
-                        link, allow_redirects=True, verify=False, timeout=15, stream=True
-                    )
                 if resolved.url:
                     final_url = resolved.url
             except Exception:
@@ -369,17 +385,14 @@ class Plugin(EvaluatorBase):
         link_headers = []
 
         try:
-            response = requests.head(
-                identifier_url, allow_redirects=True, verify=False, timeout=15
+            response = requests.get(
+                identifier_url,
+                allow_redirects=True,
+                verify=False,
+                timeout=15,
+                stream=True,
+                headers={"User-Agent": "Mozilla/5.0"},
             )
-            if response.status_code == 405:
-                response = requests.get(
-                    identifier_url,
-                    allow_redirects=True,
-                    verify=False,
-                    timeout=15,
-                    stream=True,
-                )
 
             raw_headers = None
             if hasattr(response, "raw") and hasattr(response.raw, "headers"):
@@ -416,17 +429,13 @@ class Plugin(EvaluatorBase):
 
                 final_url = item_url
                 try:
-                    resolved = requests.head(
-                        item_url, allow_redirects=True, verify=False, timeout=15
+                    resolved = requests.get(
+                        item_url,
+                        allow_redirects=True,
+                        verify=False,
+                        timeout=15,
+                        stream=True,
                     )
-                    if resolved.status_code == 405:
-                        resolved = requests.get(
-                            item_url,
-                            allow_redirects=True,
-                            verify=False,
-                            timeout=15,
-                            stream=True,
-                        )
                     if resolved.url:
                         final_url = resolved.url
                 except Exception:
@@ -443,6 +452,51 @@ class Plugin(EvaluatorBase):
                         "final_url": final_url,
                     }
                 )
+
+        return files
+
+    def _resolve_item_files_landing_html(self, identifier_url):
+        files = []
+        seen = set()
+        try:
+            response = requests.get(
+                identifier_url,
+                allow_redirects=True,
+                verify=False,
+                timeout=20,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if response.status_code != 200:
+                return []
+
+            soup = BeautifulSoup(response.text, features="html.parser")
+            landing_url = response.url
+            for tag in soup.find_all("a"):
+                href = tag.get("href")
+                if not href:
+                    continue
+                abs_url = urllib.parse.urljoin(landing_url, href)
+                if "/bitstream/" not in abs_url:
+                    continue
+                clean_url = urllib.parse.unquote(abs_url)
+                if clean_url in seen:
+                    continue
+                seen.add(clean_url)
+
+                path = urllib.parse.urlparse(clean_url).path
+                name = urllib.parse.unquote(path.split("/")[-1]) if path else ""
+                files.append(
+                    {
+                        "name": name,
+                        "extension": name.split(".")[-1] if "." in name else "",
+                        "format": "",
+                        "link": clean_url,
+                        "final_url": clean_url,
+                    }
+                )
+        except Exception as e:
+            logger.error("resolve_item_files landing html error: %s", e)
+            return []
 
         return files
 
@@ -467,6 +521,85 @@ class Plugin(EvaluatorBase):
         return metadata
 
         # TESTS
+
+    def rda_f4_01m(self):
+        """Indicator RDA-F4-01M: Metadata is offered in such a way that it can be harvested and indexed.
+
+        This indicator is linked to the following principle: F4: (Meta)data are registered or indexed
+        in a searchable resource.
+
+        The indicator tests whether the metadata is offered in such a way that it can be indexed.
+        In some cases, metadata could be provided together with the data to a local institutional
+        repository or to a domain-specific or regional portal, or metadata could be included in a
+        landing page where it can be harvested by a search engine. The indicator remains broad
+        enough on purpose not to  limit the way how and by whom the harvesting and indexing of
+        the data might be done.
+
+        Returns
+        -------
+        points
+            - 100 if metadata could be gathered using any of the supported protocols (OAI-PMH, HTTP).
+            - 0 otherwise.
+        msg
+            Message with the results or recommendations to improve this indicator
+        """
+        msg_list = []
+        points = 0
+
+        # Prefer repository-specific OAI base from config; fallback to runtime endpoint.
+        endpoint = self.oai_base
+        try:
+            endpoint = self.config[self.name].get("oai_base", fallback=endpoint)
+        except Exception:
+            pass
+
+        if not endpoint:
+            msg_list.append(
+                {
+                    "message": _(
+                        "OAI-PMH endpoint is not configured (missing oai_base)"
+                    ),
+                    "points": points,
+                }
+            )
+            return (points, msg_list)
+
+        try:
+            endpoint =endpoint.replace("https", "http")
+
+            # 2. Añadimos un User-Agent para que el proxy no nos bloquee por "parecer un bot"
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+
+            response = requests.get(
+                endpoint,
+                params={"verb": "Identify"},
+                verify=False,
+                allow_redirects=True,
+                timeout=15,
+                headers=headers
+            )
+            response.raise_for_status() # Lanza excepción si hay error 4xx o 5xx
+
+            if response.status_code == 200:
+                points = 100
+                msg = _(
+                    "Your digital object is available via OAI-PMH harvesting protocol"
+                )
+            else:
+                msg = _(
+                    "Your digital object is not available via OAI-PMH. Please, contact to repository admins"
+                ) + " (HTTP %s)" % response.status_code
+        except Exception as e:
+            logger.error("RDA-F4-01M: error checking OAI-PMH endpoint %s: %s", endpoint, e)
+            msg = _(
+                "Your digital object is not available via OAI-PMH. Please, contact to repository admins"
+            )
+
+        msg_list.append({"message": msg, "points": points})
+
+        return (points, msg_list)
 
     # ACCESS
     @ConfigTerms(term_id="terms_access")
@@ -509,21 +642,34 @@ class Plugin(EvaluatorBase):
         msg_list.append({"message": msg_st_list, "points": points})
 
         # 2 - Parse HTML in order to find the data file
-        item_id_http = idutils.to_url(
-            self.item_id,
-            idutils.detect_identifier_schemes(self.item_id)[0],
-            url_scheme="http",
-        )
-        resp = requests.head(item_id_http, allow_redirects=False, verify=False)
-        if resp.status_code == 302:
-            item_id_http = resp.headers["Location"]
-        resp = requests.head(item_id_http + "?mode=full", verify=False)
-        if resp.status_code == 200:
-            item_id_http = item_id_http + "?mode=full"
+        try:
+            schemes = idutils.detect_identifier_schemes(self.item_id)
+            if not schemes:
+                raise ValueError("Could not detect identifier scheme")
+            item_id_http = idutils.to_url(self.item_id, schemes[0], url_scheme="http")
 
-        msg_2, points_2, data_files = self.find_dataset_file(
-            self.metadata, item_id_http, self.supported_data_formats
-        )
+            resp = requests.head(
+                item_id_http, allow_redirects=False, verify=False, timeout=15
+            )
+            if resp.status_code == 302:
+                item_id_http = resp.headers["Location"]
+            resp = requests.head(item_id_http + "?mode=full", verify=False, timeout=15)
+            if resp.status_code == 200:
+                item_id_http = item_id_http + "?mode=full"
+
+            msg_2, points_2, data_files = self.find_dataset_file(
+                self.metadata, item_id_http, self.supported_data_formats
+            )
+        except Exception as e:
+            logger.error("A1_01M manual access check failed: %s", e)
+            msg_list.append(
+                {
+                    "message": _("Manual data access check could not be completed")
+                    + ": %s" % e,
+                    "points": points,
+                }
+            )
+            return (points, msg_list)
         if points_2 == 100 and points == 100:
             msg_list.append(
                 {
@@ -559,6 +705,52 @@ class Plugin(EvaluatorBase):
 
         return (points, msg_list)
 
+    def rda_a1_02m(self):
+        """Indicator RDA-A1-02M
+        This indicator is linked to the following principle: A1: (Meta)data are retrievable by their
+        identifier using a standardised communication protocol.
+
+        The indicator refers to any human interactions that are needed if the requester wants to
+        access metadata. The FAIR principle refers mostly to automated interactions where a
+        machine is able to access the metadata, but there may also be metadata that require human
+        interactions. This may be important in cases where the metadata itself contains sensitive
+        information. Human interaction might involve sending an e-mail to the metadata owner, or
+        calling by telephone to receive instructions.
+
+        Returns
+        -------
+        points
+            A number between 0 and 100 to indicate how well this indicator is supported
+        msg
+            Message with the results or recommendations to improve this indicator
+        """
+
+        # 2 - Look for the metadata terms in HTML in order to know if they can be accessed manually
+        try:
+            item_id_http = idutils.to_url(
+                self.item_id,
+                idutils.detect_identifier_schemes(self.item_id)[0],
+                url_scheme="http",
+            )
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            resp = requests.head(item_id_http, allow_redirects=False, verify=False, headers=headers)
+            if resp.status_code == 302:
+                item_id_http = resp.headers["Location"]
+            resp = requests.head(item_id_http + "?mode=full", allow_redirects=True, verify=False, headers=headers)
+            if resp.status_code == 200:
+                if "?mode=full" not in item_id_http:
+                    item_id_http = item_id_http + "?mode=full"
+            metadata_dc = self.metadata[
+                self.metadata["metadata_schema"] == self.metadata_schemas["dc"]
+            ]
+        except Exception as e:
+            logger.error(e)
+            item_id_http = self.api_endpoint
+        points, msg = ut.metadata_human_accessibility(self.metadata, item_id_http)
+        return (points, [{"message": msg, "points": points}])
+
     def rda_a1_03m(self, **kwargs):
         """Indicator RDA-A1-03M Metadata identifier resolves to a metadata record
         This indicator is linked to the following principle: A1: (Meta)data are retrievable by their
@@ -588,10 +780,13 @@ class Plugin(EvaluatorBase):
                 idutils.detect_identifier_schemes(self.item_id)[0],
                 url_scheme="http",
             )
-            resp = requests.head(item_id_http, allow_redirects=False, verify=False)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            resp = requests.head(item_id_http, allow_redirects=False, verify=False, headers=headers)
             if resp.status_code == 302:
                 item_id_http = resp.headers["Location"]
-            resp = requests.head(item_id_http + "?mode=full", verify=False)
+            resp = requests.head(item_id_http + "?mode=full", allow_redirects=True, verify=False, headers=headers)
             if resp.status_code == 200:
                 if "?mode=full" not in item_id_http:
                     item_id_http = item_id_http + "?mode=full"
@@ -725,135 +920,105 @@ class Plugin(EvaluatorBase):
                 )
                 return points, msg_list
 
-            # (2) Resolve persistent identifier to landing page.
-            id_scheme = idutils.detect_identifier_schemes(self.item_id)[0]
-            pid_url = idutils.to_url(self.item_id, id_scheme, url_scheme="https")
-            landing_response = requests.get(
-                pid_url, allow_redirects=True, verify=False, timeout=20
-            )
-            landing_url = landing_response.url
-            logger.debug("A1-03D: PID URL %s resolved to landing %s", pid_url, landing_url)
-            msg_list.append(
-                {
-                    "message": _("PID resolves to landing page") + ": %s" % landing_url,
-                    "points": 0,
-                }
-            )
-
-            # (3) Human-like HTML check: file links must be present in landing page.
-            soup = BeautifulSoup(landing_response.text, features="html.parser")
-            html_links = set()
-            html_texts = []
-            for tag in soup.find_all("a"):
-                href = tag.get("href")
-                if href:
-                    abs_link = urllib.parse.urljoin(landing_url, href)
-                    html_links.add(abs_link)
-                    html_links.add(urllib.parse.unquote(abs_link))
-                txt = (tag.get_text() or "").strip()
-                if txt:
-                    html_texts.append(txt)
-
-            logger.debug("A1-03D: extracted %s anchors from landing page", len(html_links))
-            msg_list.append(
-                {
-                    "message": _("Links discovered in landing page HTML")
-                    + ": %s" % len(html_links),
-                    "points": 0,
-                }
-            )
+            # Browser-like headers to reduce bot blocking by the repository/frontend.
+            browser_headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                ),
+                "Accept": "*/*",
+                "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
+                "Connection": "keep-alive",
+            }
 
             accessible_count = 0
-            matched_count = 0
             for row in expected_files:
                 name = row.get("name", "")
                 link = row.get("link", "")
                 final_url = row.get("final_url", "")
-
-                candidates = set()
-                if link:
-                    candidates.add(link)
-                    candidates.add(urllib.parse.unquote(link))
-                if final_url:
-                    candidates.add(final_url)
-                    candidates.add(urllib.parse.unquote(final_url))
-
-                # Match by URL in href or by visible text/file name.
-                match_url = None
-                for c in candidates:
-                    if c in html_links:
-                        match_url = c
-                        break
-                if match_url is None and name:
-                    encoded_name = urllib.parse.quote(name)
-                    for h in html_links:
-                        if name in h or encoded_name in h:
-                            match_url = h
-                            break
-                    if match_url is None:
-                        for t in html_texts:
-                            if name in t:
-                                match_url = landing_url
-                                break
-
-                if match_url is None:
-                    logger.debug("A1-03D: file not found in landing HTML: %s", name)
+                url_to_check = final_url or link
+                if not url_to_check:
                     msg_list.append(
                         {
-                            "message": _("File not present in landing page HTML")
+                            "message": _("File has no URL to validate downloadability")
                             + ": %s" % name,
                             "points": 0,
                         }
                     )
                     continue
 
-                matched_count += 1
-                logger.debug("A1-03D: file found in landing HTML: %s -> %s", name, match_url)
-                msg_list.append(
-                    {
-                        "message": _("File present in landing page HTML")
-                        + ": %s -> %s" % (name, match_url),
-                        "points": 0,
-                    }
-                )
-
-                # (4) Verify manual download URL accessibility.
-                try:
-                    check = requests.head(
-                        match_url, allow_redirects=True, verify=False, timeout=20
+                # Prefer HTTP first (as requested), then fallback to original URL.
+                candidate_urls = []
+                parsed = urllib.parse.urlparse(url_to_check)
+                if parsed.scheme == "https":
+                    candidate_urls.append(
+                        urllib.parse.urlunparse(parsed._replace(scheme="http"))
                     )
-                    if check.status_code == 405:
-                        check = requests.get(
-                            match_url,
+                candidate_urls.append(url_to_check)
+                candidate_urls.append(urllib.parse.unquote(url_to_check))
+
+                # Deduplicate preserving order.
+                candidate_urls = list(dict.fromkeys(candidate_urls))
+
+                # Verify manual download URL accessibility following redirects.
+                downloaded = False
+                try:
+                    for candidate in candidate_urls:
+                        check = requests.head(
+                            candidate,
+                            headers=browser_headers,
                             allow_redirects=True,
                             verify=False,
                             timeout=20,
-                            stream=True,
                         )
-                    if check.status_code == 200:
-                        accessible_count += 1
+                        if check.status_code in (403, 405, 406):
+                            # Fallback to GET with Range header and stream mode to avoid full download.
+                            check = requests.get(
+                                candidate,
+                                headers=dict(browser_headers, **{"Range": "bytes=0-0"}),
+                                allow_redirects=True,
+                                verify=False,
+                                timeout=20,
+                                stream=True,
+                            )
+
+                        if check.status_code in (200, 206):
+                            accessible_count += 1
+                            downloaded = True
+                            logger.debug(
+                                "A1-03D: file is manually downloadable: %s (%s)",
+                                name,
+                                check.url,
+                            )
+                            msg_list.append(
+                                {
+                                    "message": _("File is manually downloadable")
+                                    + ": %s -> %s" % (name, check.url),
+                                    "points": 0,
+                                }
+                            )
+                            if getattr(check, "raw", None):
+                                check.close()
+                            break
+
                         logger.debug(
-                            "A1-03D: file is manually downloadable: %s (%s)",
-                            name,
-                            check.url,
-                        )
-                        msg_list.append(
-                            {
-                                "message": _("File is manually downloadable")
-                                + ": %s" % name,
-                                "points": 0,
-                            }
-                        )
-                    else:
-                        logger.debug(
-                            "A1-03D: file is not downloadable (HTTP %s): %s",
+                            "A1-03D: candidate not downloadable (HTTP %s): %s | %s",
                             check.status_code,
+                            name,
+                            candidate,
+                        )
+                        if getattr(check, "raw", None):
+                            check.close()
+
+                    if not downloaded:
+                        logger.debug(
+                            "A1-03D: file is not manually downloadable with tested URLs: %s",
                             name,
                         )
                         msg_list.append(
                             {
                                 "message": _("File is not manually downloadable")
-                                + ": %s (HTTP %s)" % (name, check.status_code),
+                                + ": %s" % name,
                                 "points": 0,
                             }
                         )
@@ -874,17 +1039,16 @@ class Plugin(EvaluatorBase):
                 points = 0
 
             logger.debug(
-                "A1-03D: summary total=%s matched_in_html=%s downloadable=%s points=%s",
+                "A1-03D: summary total=%s downloadable=%s points=%s",
                 total_files,
-                matched_count,
                 accessible_count,
                 points,
             )
             msg_list.append(
                 {
                     "message": _("Manual download summary")
-                    + ": total=%s, in_html=%s, downloadable=%s"
-                    % (total_files, matched_count, accessible_count),
+                    + ": total=%s, downloadable=%s"
+                    % (total_files, accessible_count),
                     "points": points,
                 }
             )
@@ -897,6 +1061,7 @@ class Plugin(EvaluatorBase):
 
         return points, msg_list
 
+    
     def rda_a1_05d(self, **kwargs):
         """Indicator RDA-A1-01M
         This indicator is linked to the following principle: A1: (Meta)data are retrievable by their
@@ -1081,22 +1246,6 @@ class Plugin(EvaluatorBase):
             ".xlsx",
         ]
 
-        try:
-            f = open(path)
-            f.close()
-
-        except:
-            msg = "The config.ini internet media types file path does not arrive at any file. Try 'static/internetmediatipes190224.csv'"
-            logger.error(msg)
-            return (points, [{"message": msg, "points": points}])
-        logger.debug("Trying to open accepted media formats")
-        f = open(path)
-        csv_reader = csv.reader(f)
-
-        for row in csv_reader:
-            internetMediaFormats.append(row[1])
-
-        f.close()
         for e in supported_data_formats:
             internetMediaFormats.append(e)
         logger.debug("List: %s" % internetMediaFormats)
@@ -1150,7 +1299,10 @@ class Plugin(EvaluatorBase):
             (df["element"] == "identifier") & (df["qualifier"] == "uri"), "text_value"
         ]
         self.item_id = ut.get_handle_str(selected_handle.iloc[0])
+        api_endpoint = self.api_endpoint
+        self.api_endpoint = self.oai_base
         points, msg_list = super().rda_i1_02m()
+        self.api_endpoint = api_endpoint
         try:
             points = (points * self.metadata_quality) / 100
             msg_list.append({"message": _("After applying weigh"), "points": points})
@@ -1326,6 +1478,68 @@ class Plugin(EvaluatorBase):
         """
         return self.rda_i3_02m(**kwargs)
 
+    @ConfigTerms(term_id="terms_license")
+    def rda_r1_1_02m(self, license_list=[], machine_readable=False, **kwargs):
+        """Indicator R1.1-02M: Metadata refers to a standard reuse license.
+
+        This indicator is linked to the following principle: R1.1: (Meta)data are released with a clear
+        and accessible data usage license.
+
+        This indicator requires the reference to the conditions of reuse to be a standard licence,
+        rather than a locally defined license.
+
+        Returns
+        -------
+        points
+            100/100 if the license is listed under the SPDX licenses
+        msg
+            Message with the results or recommendations to improve this indicator
+        """
+        points = 0
+
+        terms_license = kwargs["terms_license"]
+        terms_license_list = terms_license["list"]
+        terms_license_metadata = terms_license["metadata"]
+
+        if license_list is None or len(license_list) == 0:
+            license_list = terms_license_metadata.text_value.values
+
+        license_num = len(license_list)
+        license_standard_list = []
+
+        for _license in license_list:
+            logger.debug("Checking license: %s" % _license)
+            if ut.is_spdx_license(_license, machine_readable=machine_readable):
+                logger.debug("%s is in list" % _license)
+                license_standard_list.append(_license)
+                points = 100
+                logger.debug(
+                    "License <%s> is considered as standard by SPDX" % _license
+                )
+            elif ut.is_spdx_license(_license+"legalcode", machine_readable=machine_readable):
+                logger.debug("%s is in list" % _license)
+                license_standard_list.append(_license)
+                points = 100
+                logger.debug(
+                    "License <%s> is considered as standard by SPDX" % _license
+                )
+        if points == 100:
+            msg = (
+                "License/s in use are considered as standard according to SPDX license list: %s"
+                % license_standard_list
+            )
+        elif points > 0:
+            msg = (
+                "A subset of the license/s in use (%s out of %s) are standard according to SDPX license list: %s"
+                % (len(license_standard_list), license_num, license_standard_list)
+            )
+        else:
+            msg = "None of the license/s defined are standard according to SPDX license list"
+        msg = " ".join([msg, "(points: %s)" % points])
+        logger.info(msg)
+
+        return (points, [{"message": msg, "points": points}])
+
     def rda_r1_1_03m(self, machine_readable=True, **kwargs):
         """Indicator R1.1-03M: Metadata refers to a machine-understandable reuse
         license.
@@ -1373,7 +1587,8 @@ class Plugin(EvaluatorBase):
         logger.debug(term_data)
         term_metadata = term_data["metadata"]
         logger.debug(term_metadata.element)
-        id_list = []
+        provenance_points = 0
+        readme_points = 0
         try:
             for index, row in term_metadata.iterrows():
                 _points = 100
@@ -1381,25 +1596,171 @@ class Plugin(EvaluatorBase):
                     {
                         "message": _("Provenance info found")
                         + ": %s" % (row["text_value"]),
-                        "points": _points,
-                    }
-                )
-            points = (
+                            "points": _points,
+                        }
+                    )
+            provenance_points = (
                 100 * len(term_metadata[["element", "qualifier"]].drop_duplicates())
             ) / len(term_data["list"])
 
         except Exception as e:
             logger.error("Error in I3_02M: %s" % e)
 
-        if points == 0:
+        if provenance_points == 0:
             msg_list.append(
                 {
                     "message": _(
                         "Provenance information can not be found. Please, include the info in config.ini"
                     ),
-                    "points": points,
+                    "points": provenance_points,
                 }
             )
+
+        # Additional provenance evidence at file level: README must exist and be non-empty.
+        try:
+            if self.file_list is None or len(self.file_list) == 0:
+                resolved_files = self.resolve_item_files(self.item_id, self.id_type)
+                self.file_list = pd.DataFrame(
+                    resolved_files,
+                    columns=["name", "extension", "format", "link", "final_url"],
+                )
+
+            readme_candidate = None
+            allowed_text_ext = {
+                "",
+                "txt",
+                "md",
+                "rst",
+                "adoc",
+                "text",
+                "csv",
+                "tsv",
+                "json",
+                "yaml",
+                "yml",
+                "xml",
+            }
+            def _candidate_names_from_row(file_row):
+                names = []
+                direct_name = str(file_row.get("name", "") or "").strip()
+                if direct_name:
+                    names.append(direct_name)
+
+                for key in ("final_url", "link"):
+                    raw_url = str(file_row.get(key, "") or "").strip()
+                    if not raw_url:
+                        continue
+                    path = urllib.parse.urlparse(raw_url).path
+                    if path:
+                        url_name = urllib.parse.unquote(path.split("/")[-1]).strip()
+                        if url_name:
+                            names.append(url_name)
+
+                return names
+
+            def _is_readme_text_file(file_row):
+                # Accept README/readme/Readme with optional text extension.
+                ext_field = str(file_row.get("extension", "") or "").strip().lower()
+                for candidate in _candidate_names_from_row(file_row):
+                    lowered = candidate.lower().strip()
+                    base, ext = os.path.splitext(lowered)
+                    ext = ext.lstrip(".").strip()
+                    if base == "readme" and (ext in allowed_text_ext):
+                        return True
+                    if base == "readme" and ext_field in allowed_text_ext:
+                        return True
+                return False
+
+            if self.file_list is not None and len(self.file_list) > 0:
+                for row_idx, row in self.file_list.iterrows():
+                    if _is_readme_text_file(row):
+                        readme_candidate = row
+                        break
+
+            if readme_candidate is None:
+                msg_list.append(
+                    {
+                        "message": _(
+                            "README file not found in digital object files"
+                        ),
+                        "points": 0,
+                    }
+                )
+            else:
+                readme_url = readme_candidate.get("final_url") or readme_candidate.get(
+                    "link"
+                )
+                readme_name = readme_candidate.get("name", "README")
+                if not readme_url:
+                    msg_list.append(
+                        {
+                            "message": _("README found but no downloadable URL")
+                            + ": %s" % readme_name,
+                            "points": 0,
+                        }
+                    )
+                else:
+                    non_empty = False
+                    requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+
+                    readme_url =readme_url.replace("https", "http")
+
+                    # 2. Añadimos un User-Agent para que el proxy no nos bloquee por "parecer un bot"
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
+
+                    # Mantenemos HTTPS, pero con verify=False
+                    response = requests.get(
+                        readme_url, 
+                        verify=False, 
+                        timeout=20, 
+                        stream=True, 
+                        headers=headers
+                    )
+                    response.raise_for_status() # Lanza excepción si hay error 4xx o 5xx
+                    
+                    if response.status_code == 200:
+                        content_len = response.headers.get("Content-Length")
+                        if content_len:
+                            try:
+                                non_empty = int(content_len) > 0
+                            except Exception:
+                                non_empty = False
+                        if not non_empty:
+                            for chunk in response.iter_content(chunk_size=1024):
+                                if chunk and chunk.strip():
+                                    non_empty = True
+                                    break
+
+                    if non_empty:
+                        readme_points = 100
+                        msg_list.append(
+                            {
+                                "message": _("README file found and not empty")
+                                + ": %s" % readme_name,
+                                "points": 100,
+                            }
+                        )
+                    else:
+                        msg_list.append(
+                            {
+                                "message": _("README file is empty or inaccessible")
+                                + ": %s" % readme_name,
+                                "points": 0,
+                            }
+                        )
+        except Exception as e:
+            logger.error("Error checking README file for provenance: %s", e)
+            msg_list.append(
+                {
+                    "message": _("Error checking README file for provenance")
+                    + ": %s" % e,
+                    "points": 0,
+                }
+            )
+
+        points = min(provenance_points, readme_points)
         return (points, msg_list)
 
     def rda_r1_3_01m(self, **kwargs):

@@ -1,0 +1,81 @@
+,text_value,metadata_schema,element,qualifier
+0,"Carlson, Colin J.",http://www.openarchives.org/OAI/2.0/oai_dc/,contributor,author
+1,"Bansal, Shweta",http://www.openarchives.org/OAI/2.0/oai_dc/,contributor,author
+2,Fig B. Time series of the Indoor Seasonality Index in unaffected counties.,http://www.openarchives.org/OAI/2.0/oai_dc/,description,abstract
+3,https://doi.org/10.1371/journal.pclm.0000542.s002,http://www.openarchives.org/OAI/2.0/oai_dc/,relation,publisherversion
+4,openAccess,http://www.openarchives.org/OAI/2.0/oai_dc/,rights,
+5,https://creativecommons.org/licenses/by/4.0/,http://www.openarchives.org/OAI/2.0/oai_dc/,rights,license
+6,Peer reviewed,http://www.openarchives.org/OAI/2.0/oai_dc/,description,peerreviewed
+7,Indoor activity,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+8,Indoor activities,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+9,"Wang, Boxuan",http://www.openarchives.org/OAI/2.0/oai_dc/,contributor,author
+10,"Stocco, Davide",http://www.openarchives.org/OAI/2.0/oai_dc/,contributor,author
+11,Poor air quality,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+12,Higher compliance needed,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+13,Sir epidemic model,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+14,Model predicts,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+15,Climate change,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+16,Induced deterioration,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+17,Induced changes,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+18,Outdoor activities caused,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+19,Related events become,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+20,Extreme weather events,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+21,West coast wildfires,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+22,Much attention,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+23,Mobility data,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+24,Human behavior,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+25,Compounded risks,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+26,Average 10,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+27,"Submitted by Serna, Nuria (nuria.serna@bib.csic.es) on 2025-12-04T13:56:30Z
+No. of bitstreams: 1
+pclm.0000542.s002.docx: 5595400 bytes, checksum: 00b430d62537b7cb9c29cd7d4684f87c (MD5)",http://www.openarchives.org/OAI/2.0/oai_dc/,description,provenance
+28,"Made available in DSpace on 2025-12-04T13:56:30Z (GMT). No. of bitstreams: 1
+pclm.0000542.s002.docx: 5595400 bytes, checksum: 00b430d62537b7cb9c29cd7d4684f87c (MD5)
+  Previous issue date: 2026-06-18",http://www.openarchives.org/OAI/2.0/oai_dc/,description,provenance
+29,2020 May affect,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+30,Public health policies,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+31,Behavioral shifts induced,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+32,Increased indoor activity,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+33,Airborne diseases,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+34,Washington experienced,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+35,Substantial reductions,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+36,Study investigates,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+37,"Valdano, Eugenio",http://www.openarchives.org/OAI/2.0/oai_dc/,contributor,author
+38,"Pullano, Giulia",http://www.openarchives.org/OAI/2.0/oai_dc/,contributor,author
+39,"Arregui García, Beatriz [0000-0002-5591-8367]",http://www.openarchives.org/OAI/2.0/oai_dc/,contributor,orcid
+40,text/csv,http://www.openarchives.org/OAI/2.0/oai_dc/,format,
+41,"Arregui García, Beatriz; Ascione, Claudio; Pera, Arianna; Wang, Boxuan; Stocco, Davide; Carlson, Colin J.; Bansal, Shweta; Valdano, Eugenio; Pullano, Giulia. 2025. Disruption of outdoor activities caused by wildfire smoke shapes circulation of respiratory pathogens. https://doi.org/10.1371/journal.pclm.0000542. http://hdl.handle.net/10261/402446",http://www.openarchives.org/OAI/2.0/oai_dc/,relation,isreferencedby
+42,"Arregui García, Beatriz",http://www.openarchives.org/OAI/2.0/oai_dc/,contributor,author
+43,2026-06-18,http://www.openarchives.org/OAI/2.0/oai_dc/,date,issued
+44,Figshare,http://www.openarchives.org/OAI/2.0/oai_dc/,publisher,
+45,10.1371/journal.pclm.0000542.s002,http://www.openarchives.org/OAI/2.0/oai_dc/,identifier,doi
+46,dataset,http://www.openarchives.org/OAI/2.0/oai_dc/,type,
+47,Sí,http://www.openarchives.org/OAI/2.0/oai_dc/,relation,csic
+48,"Ascione, Claudio",http://www.openarchives.org/OAI/2.0/oai_dc/,contributor,author
+49,"Pera, Arianna",http://www.openarchives.org/OAI/2.0/oai_dc/,contributor,author
+50,"Pullano, Giulia [0000-0001-9980-0734]",http://www.openarchives.org/OAI/2.0/oai_dc/,contributor,orcid
+51,eng,http://www.openarchives.org/OAI/2.0/oai_dc/,language,iso
+52,application/wordperfect5.1,http://www.openarchives.org/OAI/2.0/oai_dc/,format,
+53,Fostering conditions conducive,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+54,Air quality led,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+55,no ko 0 false,oprm,item,hasRevision
+56,http://hdl.handle.net/10261/408650,http://www.openarchives.org/OAI/2.0/oai_dc/,identifier,uri
+57,2025-12-04T13:56:30Z,http://www.openarchives.org/OAI/2.0/oai_dc/,date,accessioned
+58,2025-12-04T13:56:30Z,http://www.openarchives.org/OAI/2.0/oai_dc/,date,available
+59,Shorter generation times,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+60,Seattle experiencing increases,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+61,Climate change accelerates,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+62,Airborne disease transmission,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+63,Results show,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+64,Profound impacts,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+65,Greatest impact,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+66,Integrating behavioral responses,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+67,Direct health consequences,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+68,Human health,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+69,Behavioral changes,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+70,Disease dynamics,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+71,Indoor mask,http://www.openarchives.org/OAI/2.0/oai_dc/,subject,
+72,Consejo Superior de Investigaciones Científicas [https://ror.org/02gfc7t72],http://www.openarchives.org/OAI/2.0/oai_dc/,contributor,ror
+73,http://purl.org/coar/resource_type/c_ddb1,http://www.openarchives.org/OAI/2.0/oai_dc/,type,coar
+74,Indoor Seasonality Index for unaffected counties,http://www.openarchives.org/OAI/2.0/oai_dc/,title,
+75,"Arregui García, Beatriz; Ascione, Claudio; Pera, Arianna; Wang, Boxuan; Stocco, Davide; Carlson, Colin J.; Bansal, Shweta; Valdano, Eugenio; Pullano, Giulia; 2025; Indoor Seasonality Index for unaffected counties [Dataset]; Figshare; https://doi.org/10.1371/journal.pclm.0000542.s002",http://www.openarchives.org/OAI/2.0/oai_dc/,identifier,citation

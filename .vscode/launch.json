@@ -1,0 +1,46 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug FAIR-eva Plugin",
+            "type": "python",
+            "request": "launch",
+            "module": "fair_eva",
+            "args": ["--help"],
+            "justMyCode": false,
+            "python": "/datos/dev/venv-fair-eva-client/bin/python",
+            "pythonPath": "/datos/dev/venv-fair-eva-client/bin/python",
+            "debugAdapterPython": "/datos/dev/venv-fair-eva-client/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}"
+            }
+        },
+        {
+            "name": "Debug Plugin Local File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "python": "/datos/dev/venv-fair-eva-client/bin/python",
+            "pythonPath": "/datos/dev/venv-fair-eva-client/bin/python",
+            "debugAdapterPython": "/datos/dev/venv-fair-eva-client/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}"
+            }
+        },
+        {
+            "name": "Verify Local Load",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/verify_local_load.py",
+            "console": "integratedTerminal",
+            "python": "/datos/dev/venv-fair-eva-client/bin/python",
+            "pythonPath": "/datos/dev/venv-fair-eva-client/bin/python",
+            "debugAdapterPython": "/datos/dev/venv-fair-eva-client/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}"
+            }
+        }
+    ]
+}
