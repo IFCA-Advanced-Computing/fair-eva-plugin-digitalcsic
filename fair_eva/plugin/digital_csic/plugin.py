@@ -1164,12 +1164,14 @@ class Plugin(EvaluatorBase):
                             accessible_files_list.append(f)
                     except Exception as e:
                         logging.error(e)
+                logger.debug("%i files found" % number_of_files)
+                logger.debug("%i accessible files" % accessible_files)
                 if accessible_files == number_of_files:
                     points = 100
                     msg_list.append(
                         {
                             "message": _("Data is accessible automatically via HTTP:")
-                            + accessible_files_list,
+                            + " ".join(accessible_files_list),
                             "points": points,
                         }
                     )
@@ -1188,7 +1190,7 @@ class Plugin(EvaluatorBase):
                             "message": _(
                                 "Some of digital objects are accessible automatically via HTTP:"
                             )
-                            + accessible_files_list,
+                            + " ".join(accessible_files_list),
                             "points": points,
                         }
                     )
