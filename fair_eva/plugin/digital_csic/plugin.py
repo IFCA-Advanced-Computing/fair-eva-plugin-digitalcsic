@@ -6,7 +6,9 @@ import json
 import logging
 import os
 import sys
+import time
 import urllib
+import xml.etree.ElementTree as ET
 from functools import wraps
 
 import fair_eva.api.utils as ut
@@ -51,7 +53,7 @@ class Plugin(EvaluatorBase):
         self.config = config
         self.name = name
         self.lang = lang
-        self.oai_base = api_endpoint
+        self.oai_base = self.config["Generic"]["endpoint"]
 
         if ut.get_doi_str(item_id) != "":
             self.item_id = ut.get_doi_str(item_id)
@@ -77,9 +79,23 @@ class Plugin(EvaluatorBase):
         if self.metadata is None or len(self.metadata) == 0:
             raise Exception(_("Problem accessing data and metadata. Please, try again"))
             # self.metadata = oai_metadata
+        if (
+            isinstance(self.metadata, pd.DataFrame)
+            and "element" in self.metadata.columns
+            and "qualifier" in self.metadata.columns
+        ):
+            self.metadata = self.metadata[
+                ~(
+                    (self.metadata["element"] == "description")
+                    & (self.metadata["qualifier"] == "provenance")
+                )
+            ]
         logger.debug("Metadata is: %s" % self.metadata)
 
         self.metadata_quality = 100  # Value for metadata balancing
+        self._resolved_files_cache = {}
+        self._i1_01d_cache = None
+        self._default_timeout = 15
 
     def get_metadata(self):
         try:
@@ -291,14 +307,25 @@ class Plugin(EvaluatorBase):
         else:
             raise ValueError("item_type must be 'doi' or 'handle'")
 
+        cache_key = "%s:%s" % (item_type, item_pid)
+        if cache_key in self._resolved_files_cache:
+            logger.debug(
+                "resolve_item_files: using cached files for %s (%s files)",
+                cache_key,
+                len(self._resolved_files_cache[cache_key]),
+            )
+            return self._resolved_files_cache[cache_key]
+
         # 1) First attempt: Signposting on DOI/handle landing page.
         files = self._resolve_item_files_signposting(identifier_url)
         if len(files) > 0:
+            self._resolved_files_cache[cache_key] = files
             return files
 
         # 1b) Fallback: parse landing page links to /bitstream/.
         files = self._resolve_item_files_landing_html(identifier_url)
         if len(files) > 0:
+            self._resolved_files_cache[cache_key] = files
             return files
 
         # 2) Fallback: DIGITAL.CSIC REST API.
@@ -377,6 +404,7 @@ class Plugin(EvaluatorBase):
                 }
             )
 
+        self._resolved_files_cache[cache_key] = files
         return files
 
     def _resolve_item_files_signposting(self, identifier_url):
@@ -735,10 +763,22 @@ class Plugin(EvaluatorBase):
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
-            resp = requests.head(item_id_http, allow_redirects=False, verify=False, headers=headers)
+            resp = requests.head(
+                item_id_http,
+                allow_redirects=False,
+                verify=False,
+                headers=headers,
+                timeout=self._default_timeout,
+            )
             if resp.status_code == 302:
                 item_id_http = resp.headers["Location"]
-            resp = requests.head(item_id_http + "?mode=full", allow_redirects=True, verify=False, headers=headers)
+            resp = requests.head(
+                item_id_http + "?mode=full",
+                allow_redirects=True,
+                verify=False,
+                headers=headers,
+                timeout=self._default_timeout,
+            )
             if resp.status_code == 200:
                 if "?mode=full" not in item_id_http:
                     item_id_http = item_id_http + "?mode=full"
@@ -783,10 +823,22 @@ class Plugin(EvaluatorBase):
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
-            resp = requests.head(item_id_http, allow_redirects=False, verify=False, headers=headers)
+            resp = requests.head(
+                item_id_http,
+                allow_redirects=False,
+                verify=False,
+                headers=headers,
+                timeout=self._default_timeout,
+            )
             if resp.status_code == 302:
                 item_id_http = resp.headers["Location"]
-            resp = requests.head(item_id_http + "?mode=full", allow_redirects=True, verify=False, headers=headers)
+            resp = requests.head(
+                item_id_http + "?mode=full",
+                allow_redirects=True,
+                verify=False,
+                headers=headers,
+                timeout=self._default_timeout,
+            )
             if resp.status_code == 200:
                 if "?mode=full" not in item_id_http:
                     item_id_http = item_id_http + "?mode=full"
@@ -878,6 +930,7 @@ class Plugin(EvaluatorBase):
         msg
             Message with the results or recommendations to improve this indicator
         """
+        start_time = time.perf_counter()
         msg_list = []
         points = 0
         expected_files = []
@@ -917,6 +970,10 @@ class Plugin(EvaluatorBase):
                         "message": _("No files available to evaluate manual download"),
                         "points": points,
                     }
+                )
+                logger.info(
+                    "TIMING rda_a1_03d: %.3fs (no files)",
+                    time.perf_counter() - start_time,
                 )
                 return points, msg_list
 
@@ -1059,6 +1116,7 @@ class Plugin(EvaluatorBase):
                 {"message": _("Error evaluating manual downloadability"), "points": 0}
             )
 
+        logger.info("TIMING rda_a1_03d: %.3fs", time.perf_counter() - start_time)
         return points, msg_list
 
     
@@ -1095,18 +1153,25 @@ class Plugin(EvaluatorBase):
                 accessible_files_list = []
                 for f in self.file_list["link"]:
                     try:
-                        res = requests.head(f, verify=False, allow_redirects=True)
+                        res = requests.head(
+                            f,
+                            verify=False,
+                            allow_redirects=True,
+                            timeout=self._default_timeout,
+                        )
                         if res.status_code == 200:
                             accessible_files += 1
                             accessible_files_list.append(f)
                     except Exception as e:
                         logging.error(e)
+                logger.debug("%i files found" % number_of_files)
+                logger.debug("%i accessible files" % accessible_files)
                 if accessible_files == number_of_files:
                     points = 100
                     msg_list.append(
                         {
                             "message": _("Data is accessible automatically via HTTP:")
-                            + accessible_files_list,
+                            + " ".join(accessible_files_list),
                             "points": points,
                         }
                     )
@@ -1125,7 +1190,7 @@ class Plugin(EvaluatorBase):
                             "message": _(
                                 "Some of digital objects are accessible automatically via HTTP:"
                             )
-                            + accessible_files_list,
+                            + " ".join(accessible_files_list),
                             "points": points,
                         }
                     )
@@ -1208,67 +1273,85 @@ class Plugin(EvaluatorBase):
         msg
             Message with the results or recommendations to improve this indicator
         """
+        start_time = time.perf_counter()
+        if self._i1_01d_cache is not None:
+            logger.info(
+                "TIMING rda_i1_01d: %.3fs (cached)",
+                time.perf_counter() - start_time,
+            )
+            return self._i1_01d_cache
+
         points = 0
         msg_list = []
-        msg = "No internet media file path found"
-        internetMediaFormats = []
-        availableFormats = []
-        path = self.internet_media_types_path[0]
-        supported_data_formats = [
-            ".tif",
-            ".aig",
-            ".asc",
-            ".agr",
-            ".grd",
-            ".nc",
-            ".hdf",
-            ".hdf5",
-            ".pdf",
-            ".odf",
-            ".doc",
-            ".docx",
-            ".csv",
-            ".jpg",
-            ".png",
-            ".gif",
-            ".mp4",
-            ".xml",
-            ".rdf",
-            ".txt",
-            ".mp3",
-            ".wav",
-            ".zip",
-            ".rar",
-            ".tar",
-            ".tar.gz",
-            ".jpeg",
-            ".xls",
-            ".xlsx",
-        ]
 
-        for e in supported_data_formats:
-            internetMediaFormats.append(e)
-        logger.debug("List: %s" % internetMediaFormats)
+        media_types_path = self._resolve_media_types_file_path()
+        internet_media_formats = []
+
+        if media_types_path:
+            internet_media_formats = self._load_media_types_from_csv(media_types_path)
+            if internet_media_formats:
+                msg_list.append(
+                    {
+                        "message": _(
+                            "Internet media types loaded from local file"
+                        )
+                        + ": %s" % media_types_path,
+                        "points": 100,
+                    }
+                )
+
+        if not internet_media_formats:
+            internet_media_formats = self._load_media_types_from_remote()
+            if internet_media_formats:
+                msg_list.append(
+                    {
+                        "message": _(
+                            "Internet media types loaded from remote IANA registry"
+                        ),
+                        "points": 100,
+                    }
+                )
+
+        if not internet_media_formats:
+            msg = _(
+                "Could not load internet media types from configured file or remote IANA registry"
+            )
+            msg_list.append({"message": msg, "points": points})
+            self._i1_01d_cache = (points, msg_list)
+            logger.info("TIMING rda_i1_01d: %.3fs", time.perf_counter() - start_time)
+            return self._i1_01d_cache
 
         try:
-            item_id_http = idutils.to_url(
-                self.item_id,
-                idutils.detect_identifier_schemes(self.item_id)[0],
-                url_scheme="http",
+            schemes = idutils.detect_identifier_schemes(self.item_id)
+            if schemes:
+                item_id_http = idutils.to_url(
+                    self.item_id,
+                    schemes[0],
+                    url_scheme="http",
+                )
+            else:
+                item_id_http = self.item_id
+            points, msg, data_files = ut.find_dataset_file(
+                self.item_id, item_id_http, internet_media_formats
             )
-            logger.debug("Searching for dataset files")
-            points, msg, data_files = self.find_dataset_file(
-                self.item_id, item_id_http, internetMediaFormats
-            )
-            for e in data_files:
-                logger.debug(e)
+            for data_file in data_files:
+                logger.debug(data_file)
             msg_list.append({"message": msg, "points": points})
             if points == 0:
                 msg_list.append({"message": _("No files found"), "points": points})
         except Exception as e:
             logger.error(e)
+            msg_list.append(
+                {
+                    "message": _("Error checking data formats with internet media types")
+                    + ": %s" % e,
+                    "points": 0,
+                }
+            )
 
-        return (points, msg_list)
+        self._i1_01d_cache = (points, msg_list)
+        logger.info("TIMING rda_i1_01d: %.3fs", time.perf_counter() - start_time)
+        return self._i1_01d_cache
 
     def rda_i1_02m(self, **kwargs):
         """Indicator RDA-A1-01M
@@ -1589,6 +1672,7 @@ class Plugin(EvaluatorBase):
         logger.debug(term_metadata.element)
         provenance_points = 0
         readme_points = 0
+        codebook_points = 0
         try:
             for index, row in term_metadata.iterrows():
                 _points = 100
@@ -1626,20 +1710,7 @@ class Plugin(EvaluatorBase):
                 )
 
             readme_candidate = None
-            allowed_text_ext = {
-                "",
-                "txt",
-                "md",
-                "rst",
-                "adoc",
-                "text",
-                "csv",
-                "tsv",
-                "json",
-                "yaml",
-                "yml",
-                "xml",
-            }
+            codebook_candidate = None
             def _candidate_names_from_row(file_row):
                 names = []
                 direct_name = str(file_row.get("name", "") or "").strip()
@@ -1658,23 +1729,24 @@ class Plugin(EvaluatorBase):
 
                 return names
 
-            def _is_readme_text_file(file_row):
-                # Accept README/readme/Readme with optional text extension.
-                ext_field = str(file_row.get("extension", "") or "").strip().lower()
+            def _filename_contains_token(file_row, token):
                 for candidate in _candidate_names_from_row(file_row):
                     lowered = candidate.lower().strip()
-                    base, ext = os.path.splitext(lowered)
-                    ext = ext.lstrip(".").strip()
-                    if base == "readme" and (ext in allowed_text_ext):
-                        return True
-                    if base == "readme" and ext_field in allowed_text_ext:
+                    if token in lowered:
                         return True
                 return False
 
             if self.file_list is not None and len(self.file_list) > 0:
                 for row_idx, row in self.file_list.iterrows():
-                    if _is_readme_text_file(row):
+                    if readme_candidate is None and _filename_contains_token(
+                        row, "readme"
+                    ):
                         readme_candidate = row
+                    if codebook_candidate is None and _filename_contains_token(
+                        row, "codebook"
+                    ):
+                        codebook_candidate = row
+                    if readme_candidate is not None and codebook_candidate is not None:
                         break
 
             if readme_candidate is None:
@@ -1750,17 +1822,35 @@ class Plugin(EvaluatorBase):
                                 "points": 0,
                             }
                         )
+            if codebook_candidate is None:
+                msg_list.append(
+                    {
+                        "message": _(
+                            "CODEBOOK file not found in digital object files"
+                        ),
+                        "points": 0,
+                    }
+                )
+            else:
+                codebook_points = 100
+                codebook_name = codebook_candidate.get("name", "CODEBOOK")
+                msg_list.append(
+                    {
+                        "message": _("CODEBOOK file found") + ": %s" % codebook_name,
+                        "points": 100,
+                    }
+                )
         except Exception as e:
             logger.error("Error checking README file for provenance: %s", e)
             msg_list.append(
                 {
-                    "message": _("Error checking README file for provenance")
+                    "message": _("Error checking README/CODEBOOK files for provenance")
                     + ": %s" % e,
                     "points": 0,
                 }
             )
 
-        points = min(provenance_points, readme_points)
+        points = min(provenance_points, readme_points, codebook_points)
         return (points, msg_list)
 
     def rda_r1_3_01m(self, **kwargs):
@@ -1831,7 +1921,10 @@ class Plugin(EvaluatorBase):
         points
            100/100 if the data standard appears in Fairsharing (0/100 otherwise)
         """
-        return self.rda_i1_01d()
+        start_time = time.perf_counter()
+        result = self.rda_i1_01d()
+        logger.info("TIMING rda_r1_3_01d: %.3fs", time.perf_counter() - start_time)
+        return result
 
     def rda_r1_3_02m(self, **kwargs):
         """Indicator RDA-A1-01M
@@ -1947,6 +2040,115 @@ class Plugin(EvaluatorBase):
         except Exception as e:
             logger.error("TEST A102M: Problem loading plugin config: %s" % e)
         return uri
+
+    def _resolve_media_types_file_path(self):
+        raw_paths = []
+        if isinstance(self.internet_media_types_path, list):
+            raw_paths = self.internet_media_types_path
+        elif self.internet_media_types_path:
+            raw_paths = [self.internet_media_types_path]
+
+        plugin_dir = os.path.dirname(__file__)
+        fair_eva_dir = os.path.abspath(os.path.join(plugin_dir, "..", ".."))
+        cwd = os.getcwd()
+        candidates = []
+
+        for raw_path in raw_paths:
+            if not raw_path:
+                continue
+            raw_path = str(raw_path)
+            base_name = os.path.basename(raw_path)
+            if os.path.isabs(raw_path):
+                candidates.append(raw_path)
+            else:
+                candidates.extend(
+                    [
+                        raw_path,
+                        os.path.join(cwd, raw_path),
+                        os.path.join(plugin_dir, raw_path),
+                        os.path.join(fair_eva_dir, raw_path),
+                        os.path.join(fair_eva_dir, "static", base_name),
+                    ]
+                )
+
+        try:
+            import fair_eva
+
+            core_dir = os.path.dirname(fair_eva.__file__)
+            for raw_path in raw_paths:
+                if not raw_path:
+                    continue
+                base_name = os.path.basename(str(raw_path))
+                candidates.extend(
+                    [
+                        os.path.join(core_dir, str(raw_path)),
+                        os.path.join(core_dir, "static", base_name),
+                    ]
+                )
+        except Exception as e:
+            logger.debug("Could not inspect core fair_eva package path: %s", e)
+
+        checked = set()
+        for candidate in candidates:
+            normalized = os.path.abspath(candidate)
+            if normalized in checked:
+                continue
+            checked.add(normalized)
+            if os.path.isfile(normalized):
+                logger.debug("Resolved internet media types path: %s", normalized)
+                return normalized
+
+        return None
+
+    def _load_media_types_from_csv(self, csv_path):
+        media_types = []
+        try:
+            with open(csv_path, encoding="utf-8") as media_file:
+                csv_reader = csv.reader(media_file)
+                for row in csv_reader:
+                    if not row:
+                        continue
+                    for value in (row[1] if len(row) > 1 else "", row[0]):
+                        value = str(value).strip()
+                        if "/" in value:
+                            media_types.append(value)
+        except Exception as e:
+            logger.error("Error reading internet media types CSV (%s): %s", csv_path, e)
+            return []
+
+        unique_media_types = list(dict.fromkeys(media_types))
+        logger.debug("Loaded %s media types from CSV", len(unique_media_types))
+        return unique_media_types
+
+    def _load_media_types_from_remote(self):
+        remote_path = "https://www.iana.org/assignments/media-types/media-types.xml"
+        try:
+            remote_path = self.config.get(
+                "internet media types", "remote_path", fallback=remote_path
+            )
+        except Exception:
+            pass
+
+        try:
+            response = requests.get(remote_path, timeout=20, verify=False)
+            response.raise_for_status()
+            root = ET.fromstring(response.content)
+            media_types = []
+            for node in root.iter():
+                tag = node.tag.split("}")[-1]
+                if tag == "file" and node.text:
+                    value = node.text.strip()
+                    if "/" in value:
+                        media_types.append(value)
+            unique_media_types = list(dict.fromkeys(media_types))
+            logger.debug(
+                "Loaded %s media types from remote IANA registry",
+                len(unique_media_types),
+            )
+            return unique_media_types
+        except Exception as e:
+            logger.error("Error loading remote internet media types from %s: %s", remote_path, e)
+            return []
 
     def find_dataset_file(self, metadata, url, data_formats):
         headers = {
